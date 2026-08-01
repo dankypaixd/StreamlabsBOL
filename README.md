@@ -1,59 +1,27 @@
-# Generador de BOL y dimensiones
+# Generador de BOL y convertidor de dimensiones
 
-Aplicacion Streamlit con dos apartados:
+Aplicación Streamlit para:
 
-## 1. Generar BOL
+1. Leer Commercial Invoices VRP y BEX y generar un BOL por Air Waybill.
+2. Revisar los BOL detectados en una tabla ordenada numéricamente.
+3. Seleccionar cuáles BOL generar y editar la dirección que aparecerá en el PDF.
+4. Leer archivos de dimensiones VRP/BEX, distribuir cajas y pesos por pallet y exportar la plantilla final.
+5. Editar cualquier celda de la tabla de dimensiones, agregar filas o eliminar filas antes de exportar.
 
-- Lee Commercial Invoices VRP y BEX.
-- Primero utiliza el texto del PDF y aplica OCR si la pagina es una imagen.
-- Extrae Air Waybill, Packing ID, Heart Order y Ship To.
-- Ignora el Order Item que aparece junto a Ship To en las CI de BEX.
-- Deduplica paginas: un BOL por Air Waybill.
-- Permite marcar todos, desmarcar todos o elegir BOL individualmente.
-- Fecha y hora del BOL en horario de Costa Rica.
-- Reglas de destino:
-  - Mexico -> Corporativo Galvan S.C, Laredo.
-  - Otros paises de Latinoamerica -> US_MIAMI DSV Inc. - MIA.
-  - Puerto Rico se conserva sin cambios.
-  - Los destinos fuera de Latinoamerica se conservan.
+## Archivos principales
 
-## 2. Convertir dimensiones
+- `streamlit_app.py`: interfaz de la aplicación.
+- `bol_generator.py`: lectura de CI y generación de BOL.
+- `dimension_converter.py`: lectura de archivos VRP/BEX y creación del Excel.
+- `assets/BOL_TEMPLATE.pdf`: plantilla de BOL.
+- `assets/DIMENSIONES_TEMPLATE.xlsx`: plantilla de dimensiones.
+- `.streamlit/config.toml`: tema oscuro y configuración de carga.
 
-- Acepta `.xlsx` de VRP y `.xls` de BEX.
-- Agrupa por trailer + tracking.
-- Suma pallets, cajas y peso en kg.
-- Convierte el peso total a libras enteras.
-- Distribuye cajas y libras enteras entre los pallets sin alterar los totales.
-- Crea una fila por pallet.
-- Todas las dimensiones se exportan como `48 x 40 x 40`.
-- Deja RACK, HAZMAT, TIME IN y TIME OUT vacios.
+## Despliegue
 
-## Publicar en Streamlit Community Cloud
+En Streamlit Community Cloud usa:
 
-1. Descomprime el ZIP.
-2. En GitHub abre el repositorio.
-3. Usa **Add file -> Upload files**.
-4. Arrastra el contenido de la carpeta, no el ZIP.
-5. Confirma que `streamlit_app.py` quede en la raiz y que existan:
+- Branch: `main`
+- Main file path: `streamlit_app.py`
 
-```text
-assets/BOL_TEMPLATE.pdf
-assets/DIMENSIONES_TEMPLATE.xlsx
-.streamlit/config.toml
-bol_generator.py
-dimension_converter.py
-packages.txt
-requirements.txt
-streamlit_app.py
-```
-
-6. Haz **Commit changes**.
-7. En Streamlit Community Cloud despliega:
-
-```text
-Repository: usuario/repositorio
-Branch: main
-Main file path: streamlit_app.py
-```
-
-Cuando actualices archivos en GitHub, Streamlit volvera a desplegar la aplicacion automaticamente.
+Al subir cambios al repositorio, reinicia la aplicación si Streamlit no los muestra automáticamente.

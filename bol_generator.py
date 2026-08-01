@@ -466,7 +466,15 @@ def extract_unique_records(ci_pdf: bytes) -> list[BolRecord]:
             "No se pudieron leer todos los campos de estos Air Waybill: " + ", ".join(incomplete)
         )
 
-    return [apply_destination_rule(record) for record in records.values()]
+    transformed = [apply_destination_rule(record) for record in records.values()]
+
+    def numeric_sort_key(record: BolRecord):
+        value = record.air_waybill.strip()
+        if value.isdigit():
+            return (0, int(value), value)
+        return (1, value, value)
+
+    return sorted(transformed, key=numeric_sort_key)
 
 
 def _fit_lines(lines: Sequence[str], max_width: float, fontsize: float) -> list[str]:

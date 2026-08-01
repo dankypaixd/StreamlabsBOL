@@ -42,6 +42,10 @@ class OutputRow:
     weight_lb: int
     boxes: int
     scanned_time: str
+    rack: str = ""
+    hazmat: str = ""
+    time_in: str = ""
+    time_out: str = ""
 
 
 class DimensionConversionError(ValueError):
@@ -337,11 +341,11 @@ def create_output_workbook(
             record.height,
             record.weight_lb,
             record.boxes,
-            None,
-            None,
+            record.rack or None,
+            record.hazmat or None,
             record.scanned_time,
-            None,
-            None,
+            record.time_in or None,
+            record.time_out or None,
         ]
         for column, value in enumerate(values, start=1):
             worksheet.cell(row_index, column).value = value
