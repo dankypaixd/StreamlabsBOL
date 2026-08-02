@@ -15,7 +15,7 @@ Aplicación Streamlit para:
 - `dimension_converter.py`: lectura de archivos VRP/BEX y creación del Excel.
 - `assets/BOL_TEMPLATE.pdf`: plantilla de BOL.
 - `assets/DIMENSIONES_TEMPLATE.xlsx`: plantilla de dimensiones.
-- `.streamlit/config.toml`: tema oscuro y configuración de carga.
+- `.streamlit/config.toml`: configuración base y límite de carga.
 
 ## Despliegue
 
@@ -26,11 +26,11 @@ En Streamlit Community Cloud usa:
 
 Al subir cambios al repositorio, reinicia la aplicación si Streamlit no los muestra automáticamente.
 
+## Cambios V6
 
-## Cambios V5
-
-- Todas las filas de dimensiones aparecen marcadas por defecto.
-- Se pueden marcar o desmarcar filas individualmente o con los botones globales.
-- El Excel final incluye únicamente las filas seleccionadas.
-- Los Waybills se ordenan numéricamente tanto en la tabla como en el archivo exportado.
-- El Excel se exporta como valores simples, sin filtros ni tablas de Excel.
+- Botón global para cambiar toda la interfaz entre español e inglés.
+- Botón global para cambiar toda la página entre modo oscuro y modo claro.
+- Campo opcional para personalizar el nombre del PDF de BOL.
+- Campo opcional para personalizar el nombre del Excel de dimensiones.
+- Si el nombre queda vacío, se conservan `BOLS_GENERADOS.pdf` y `DIMENSIONES_CONVERTIDAS.xlsx`.
+- Se conservan la selección de filas, la edición de tablas y el orden numérico de Waybills.
