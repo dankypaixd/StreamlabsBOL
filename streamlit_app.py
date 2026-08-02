@@ -32,6 +32,8 @@ st.set_page_config(
 TRANSLATIONS: dict[str, dict[str, str]] = {
     "es": {
         "app_title": "Generador de BOL y convertidor de dimensiones",
+        "app_version": "Versión 7",
+        "interface_controls": "Idioma y apariencia",
         "switch_language": "🌐 English",
         "switch_dark": "🌙 Modo oscuro",
         "switch_light": "☀️ Modo claro",
@@ -106,6 +108,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "en": {
         "app_title": "BOL generator and dimensions converter",
+        "app_version": "Version 7",
+        "interface_controls": "Language and appearance",
         "switch_language": "🌐 Español",
         "switch_dark": "🌙 Dark mode",
         "switch_light": "☀️ Light mode",
@@ -431,27 +435,39 @@ def _edited_dimension_rows(edited: pd.DataFrame) -> list[OutputRow]:
     return rows
 
 
-# Global controls: both affect the entire application.
-control_spacer, language_col, theme_col = st.columns([6, 1, 1])
+# Apply the selected theme before drawing the visible interface controls.
+_apply_theme(st.session_state.theme_mode)
+
+st.title(t("app_title"))
+version_col, spacer_col = st.columns([1, 7])
+with version_col:
+    st.caption(t("app_version"))
+
+st.markdown(f"#### {t('interface_controls')}")
+language_col, theme_col, control_spacer = st.columns([1.6, 1.6, 4.8])
 with language_col:
     st.button(
         t("switch_language"),
         key="language_toggle",
         use_container_width=True,
         on_click=_toggle_language,
+        type="secondary",
     )
 with theme_col:
-    theme_label = t("switch_light") if st.session_state.theme_mode == "dark" else t("switch_dark")
+    theme_label = (
+        t("switch_light")
+        if st.session_state.theme_mode == "dark"
+        else t("switch_dark")
+    )
     st.button(
         theme_label,
         key="theme_toggle",
         use_container_width=True,
         on_click=_toggle_theme,
+        type="secondary",
     )
 
-_apply_theme(st.session_state.theme_mode)
-
-st.title(t("app_title"))
+st.divider()
 
 bol_tab, dimensions_tab = st.tabs([t("tab_bol"), t("tab_dimensions")])
 

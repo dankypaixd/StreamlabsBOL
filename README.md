@@ -26,10 +26,10 @@ En Streamlit Community Cloud usa:
 
 Al subir cambios al repositorio, reinicia la aplicación si Streamlit no los muestra automáticamente.
 
-## Cambios V6
+## Cambios V7
 
-- Botón global para cambiar toda la interfaz entre español e inglés.
-- Botón global para cambiar toda la página entre modo oscuro y modo claro.
+- Botones globales visibles debajo del título para cambiar toda la interfaz entre español e inglés y alternar modo oscuro/claro.
+- Indicador visible de “Versión 7” para confirmar que Streamlit cargó la actualización correcta.
 - Campo opcional para personalizar el nombre del PDF de BOL.
 - Campo opcional para personalizar el nombre del Excel de dimensiones.
 - Si el nombre queda vacío, se conservan `BOLS_GENERADOS.pdf` y `DIMENSIONES_CONVERTIDAS.xlsx`.
