@@ -103,9 +103,14 @@ def _selected_bol_records(
 
 
 def _dimension_dataframe(rows: list[OutputRow]) -> pd.DataFrame:
+    ordered_rows = sorted(
+        rows,
+        key=lambda row: (_numeric_key(row.barcode), _numeric_key(row.trailer)),
+    )
     return pd.DataFrame(
         [
             {
+                "Generar": True,
                 "CARRIER": row.carrier,
                 "TRAILER": row.trailer,
                 "Barcode": row.barcode,
@@ -120,7 +125,7 @@ def _dimension_dataframe(rows: list[OutputRow]) -> pd.DataFrame:
                 "TIME IN": row.time_in,
                 "TIME OUT": row.time_out,
             }
-            for row in rows
+            for row in ordered_rows
         ]
     )
 
@@ -143,6 +148,8 @@ def _integer(value: Any, field: str, row_number: int) -> int:
 def _edited_dimension_rows(edited: pd.DataFrame) -> list[OutputRow]:
     rows: list[OutputRow] = []
     for index, row in edited.iterrows():
+        if not bool(row.get("Generar", False)):
+            continue
         row_number = int(index) + 2 if isinstance(index, int) else len(rows) + 2
         key_values = [row.get("CARRIER"), row.get("TRAILER"), row.get("Barcode")]
         if all(_text(value) == "" for value in key_values):
@@ -164,6 +171,7 @@ def _edited_dimension_rows(edited: pd.DataFrame) -> list[OutputRow]:
                 time_out=_text(row.get("TIME OUT")),
             )
         )
+    rows.sort(key=lambda record: (_numeric_key(record.barcode), _numeric_key(record.trailer)))
     return rows
 
 
@@ -334,13 +342,40 @@ with dimensions_tab:
         if table_key in st.session_state:
             st.markdown("#### Tabla final editable")
             st.caption(
-                "Puedes modificar cualquier celda, borrar filas o agregar nuevas. "
-                "El Excel se exportará exactamente con los valores visibles en esta tabla."
+                "Todas las filas aparecen marcadas al generarse. Puedes editar cualquier celda, "
+                "desmarcar las filas que no quieras, borrar filas o agregar nuevas. "
+                "El Excel incluirá únicamente las filas marcadas y las ordenará por Waybill."
             )
 
-            reset_col, summary_col = st.columns([1, 3])
+            all_col, none_col, reset_col, summary_col = st.columns([1, 1, 1, 3])
+            with all_col:
+                if st.button(
+                    "Marcar todos",
+                    use_container_width=True,
+                    key=f"dimension_all_{dimension_hash}",
+                ):
+                    table = st.session_state[table_key].copy(deep=True)
+                    table["Generar"] = True
+                    st.session_state[table_key] = table
+                    st.session_state.pop(editor_key, None)
+                    st.rerun()
+            with none_col:
+                if st.button(
+                    "Desmarcar todos",
+                    use_container_width=True,
+                    key=f"dimension_none_{dimension_hash}",
+                ):
+                    table = st.session_state[table_key].copy(deep=True)
+                    table["Generar"] = False
+                    st.session_state[table_key] = table
+                    st.session_state.pop(editor_key, None)
+                    st.rerun()
             with reset_col:
-                if st.button("Restaurar tabla original", use_container_width=True):
+                if st.button(
+                    "Restaurar tabla",
+                    use_container_width=True,
+                    key=f"dimension_reset_{dimension_hash}",
+                ):
                     st.session_state[table_key] = st.session_state[original_key].copy(deep=True)
                     st.session_state.pop(editor_key, None)
                     st.rerun()
@@ -354,6 +389,12 @@ with dimensions_tab:
                 height=600,
                 row_height=36,
                 column_config={
+                    "Generar": st.column_config.CheckboxColumn(
+                        "GENERAR",
+                        width="small",
+                        default=True,
+                        help="Desmarca una fila para excluirla del Excel final.",
+                    ),
                     "CARRIER": st.column_config.TextColumn("CARRIER", width="small"),
                     "TRAILER": st.column_config.TextColumn("TRAILER", width="small"),
                     "Barcode": st.column_config.TextColumn("Barcode", width="small"),
@@ -377,7 +418,7 @@ with dimensions_tab:
 
             try:
                 edited_rows = _edited_dimension_rows(edited_dimension_table)
-                summary_col.info(f"Filas que se exportarán: {len(edited_rows)}")
+                summary_col.info(f"Filas seleccionadas para exportar: {len(edited_rows)}")
                 export_key = f"dimension_export_{dimension_hash}"
                 table_fingerprint = sha256(
                     edited_dimension_table.fillna("").to_csv(index=False).encode("utf-8")

@@ -100,6 +100,13 @@ def _canonical_code(value: Any) -> str:
     return text
 
 
+def _numeric_code_key(value: str) -> tuple[int, int | str, str]:
+    text = str(value).strip()
+    if text.isdigit():
+        return (0, int(text), text)
+    return (1, text, text)
+
+
 def _read_xlsx(file_bytes: bytes) -> list[tuple[str, list[list[Any]]]]:
     workbook = load_workbook(BytesIO(file_bytes), data_only=True, read_only=True)
     sheets: list[tuple[str, list[list[Any]]]] = []
@@ -256,6 +263,13 @@ def _parse_groups(file_bytes: bytes, filename: str) -> list[DimensionGroup]:
             )
         )
 
+    records.sort(
+        key=lambda record: (
+            _numeric_code_key(record.barcode),
+            _numeric_code_key(record.trailer),
+            record.source_type,
+        )
+    )
     return records
 
 
@@ -278,7 +292,15 @@ def _format_scanned_time(now: datetime | None = None) -> str:
 def build_output_rows(groups: Sequence[DimensionGroup], now: datetime | None = None) -> list[OutputRow]:
     scanned_time = _format_scanned_time(now)
     rows: list[OutputRow] = []
-    for group in groups:
+    ordered_groups = sorted(
+        groups,
+        key=lambda group: (
+            _numeric_code_key(group.barcode),
+            _numeric_code_key(group.trailer),
+            group.source_type,
+        ),
+    )
+    for group in ordered_groups:
         box_distribution = _distribute_integer(group.boxes, group.pallets)
         weight_distribution = _distribute_integer(group.weight_lb, group.pallets)
         for boxes, weight in zip(box_distribution, weight_distribution):
@@ -350,8 +372,11 @@ def create_output_workbook(
         for column, value in enumerate(values, start=1):
             worksheet.cell(row_index, column).value = value
 
-    worksheet.auto_filter.ref = f"A1:M{max(1, len(output_rows) + 1)}"
-    worksheet.freeze_panes = "A2"
+    # Export a plain value-only range: no Excel tables and no filter dropdowns.
+    for table_name in list(worksheet.tables.keys()):
+        del worksheet.tables[table_name]
+    worksheet.auto_filter.ref = None
+    worksheet.freeze_panes = None
 
     output = BytesIO()
     workbook.save(output)
