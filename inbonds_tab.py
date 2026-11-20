@@ -207,6 +207,7 @@ def contacts_from_invoice(name: str, content: bytes) -> list[cr.Contact]:
             key=record.air_waybill, bol=record.air_waybill, source_file=name, pages=[record.source_page],
             carrier_sources={k: v for k, v in (("pdf", record.source_format), ("file", cr.carrier_from_filename(name))) if v},
             state=state, zip_code=zip_code,
+            consignee=destinations.consignee_number(record.ship_to_lines),
             agreement={"state": 1.0, "bol": 1.0},
         )
         if rule:
@@ -450,7 +451,9 @@ def render(t: Callable[..., str]) -> None:
         if current is None or (contact.confirmed and not current.confirmed):
             by_bol[contact.bol] = contact
     shipments = [
-        de.ShipmentRow(bol=bol, state=c.state, carrier=c.carrier if c.carrier in de.SHIPPER_NUMBER else "")
+        de.ShipmentRow(
+            bol=bol, state=c.state, carrier=c.carrier if c.carrier in de.SHIPPER_NUMBER else "", consignee=c.consignee,
+        )
         for bol, c in sorted(by_bol.items(), key=lambda item: ct._numeric(item[0])) if bol
     ]
     no_state = [s.bol for s in shipments if not sl.normalize_state(s.state)]
@@ -464,7 +467,8 @@ def render(t: Callable[..., str]) -> None:
     st.caption(t("ib_priority_note") + " " + t("ct_row_count", count=len(results)))
     st.dataframe(pd.DataFrame([{
         t("ct_col_bol"): r.values["B"], "Carrier": next((s.carrier for s in shipments if s.bol == r.bol), ""),
-        t("ct_col_service"): r.service, t("ct_col_delivery"): r.delivery, "FK": r.values["FK"],
+        t("ct_col_service"): r.service, t("ct_col_delivery"): r.delivery, "Consignee No.": r.values["T"],
+        "FK": r.values["FK"],
     } for r in results]), width="stretch", hide_index=True)
 
     name_input = st.text_input(t("ct_filename"), key="ib_filename", help=t("ct_filename_help"), placeholder=ready or "DATE_IMPORT")

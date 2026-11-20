@@ -70,3 +70,44 @@ def test_reclassify_drops_destination_note_when_state_is_edited():
     contact.state = "CA"
     cr.reclassify(contact, None, need_contact=False)
     assert "destination_mexico" not in contact.reasons
+
+
+@pytest.mark.parametrize(
+    "lines, number",
+    [
+        (["ACME SA", "CALLE 5 No 10", "MONTERREY, NL 66260", "MX"], "147229"),  # Mexico: se convierte a Laredo
+        (["EMPRESA LTDA", "RUA X 10", "SAO PAULO SP 01310-100", "BR"], "210475"),  # Latam: se convierte a Miami
+        (["Corporativo Galvan S.C", "11905 Conly Road", "Laredo TX 78045", "USA"], "147229"),  # ya es la de Laredo
+        (["ACME", "11905 CONLY RD", "LAREDO, TX 78045", "US"], "147229"),
+        (["US_MIAMI DSV Inc. - MIA", "12430 NW 25th Street, Suite 100", "Miami, FL 33182", "US"], "210475"),  # ya es la de Miami
+        (["ACME", "12430 NW 25TH ST", "MIAMI FL 33182", "US"], "210475"),
+        (["ACME", "100 MAIN STREET", "Houston, TX 77001", "US"], ""),  # el resto queda vacio
+        (["ACME", "1 MAIN ST", "Panama City, FL 32401", "US"], ""),
+        (["ACME", "1 MAIN ST", "Mexico, MO 65265", "US"], ""),
+        (["ACME", "1 CALLE", "SAN JUAN, PR 00901", "PR"], ""),
+        (["ACME", "1 MAIN ST", "Mississauga, ON L5N 8E9", "CA"], ""),
+        ([], ""),
+    ],
+)
+def test_consignee_number(lines, number):
+    assert d.consignee_number(lines) == number
+
+
+@pytest.mark.skipif(shutil.which("tesseract") is None, reason="Tesseract no instalado")
+def test_bol_scan_fills_consignee_number():
+    import contact_extractor as ce
+    import contact_review as cr
+
+    pages = [
+        {**SAMPLE[0], "bol": "3049921", "city_line": "MONTERREY, NL 66260", "country": "MX"},
+        {**SAMPLE[1], "bol": "3049922", "city_line": "SAO PAULO SP 01310-100", "country": "BR"},
+        {**SAMPLE[0], "bol": "3049923", "address": "11905 CONLY ROAD", "city_line": "Laredo TX 78045", "country": "USA"},
+        {**SAMPLE[1], "bol": "3049924", "address": "12430 NW 25TH STREET", "city_line": "Miami, FL 33182", "country": "US"},
+        {**SAMPLE[0], "bol": "3049925", "city_line": "Houston, TX 77001", "country": "US"},
+    ]
+    pdf = ce.read_pdf(make_bol_pdf(pages), "VRP_cn.pdf", workers=1)
+    contacts = {c.bol: c for c in cr.build_contacts([pdf])}
+    assert [contacts[b].consignee for b in ("3049921", "3049922", "3049923", "3049924", "3049925")] == [
+        "147229", "210475", "147229", "210475", "",
+    ]
+    assert contacts["3049923"].state == "TX" and contacts["3049924"].state == "FL"

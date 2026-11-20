@@ -129,3 +129,16 @@ def test_ready_is_optional_and_leaves_dependent_fields_blank():
     assert (values["Q"], values["R"], values["S"], values["AF"]) == ("", "", "", "")
     assert values["AG"] == "1600" and values["AK"] == "3D" and values["E"] == "144463"
     assert "no_ready" in result.warnings and result.delivery == ""
+
+
+def test_consignee_number_goes_in_column_t_only_when_given():
+    headers = de.load_headers()["DATE"]
+    assert headers[19] == "Consignee Number"  # columna T
+    rows = [
+        de.ShipmentRow("3049901", state="TX", carrier="VRP", consignee="147229"),
+        de.ShipmentRow("3049902", state="FL", carrier="BEX", consignee="210475"),
+        de.ShipmentRow("3049903", state="TX", carrier="VRP"),
+    ]
+    blob, _ = de.build_workbook(rows, "11/19/26 1356", None, include_data=False)
+    sheet = load_workbook(io.BytesIO(blob))["DATE"]
+    assert [sheet[f"T{n}"].value for n in (2, 3, 4)] == ["147229", "210475", None]

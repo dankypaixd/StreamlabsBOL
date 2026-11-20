@@ -10,6 +10,8 @@ Columnas de DATE que se llenan (el resto queda vacio, como en el template):
     Q  Pickup Date             primeros 8 caracteres del READY DATE (MM/DD/YY)
     R  Pickup Time             ultimos 5 caracteres del READY DATE (como RIGHT(N2,5))
     S  Pickup Close Time       "1700"
+    T  Consignee Number        147229 (Ship To 11905 Conly Road, Laredo) o 210475 (12430 NW 25th Street, Miami);
+                               en cualquier otra direccion queda vacio
     AB Consignee Contact       nombre            <- Ship To Attention
     AC Consignee Phone         telefono          <- Ship To Attention
     AF Scheduled Delivery Date fecha de entrega (MM/DD/YY, segun service level y cut-off)
@@ -218,6 +220,7 @@ class ShipmentRow:
     state: str = ""
     carrier: str = ""  # BEX / VRP
     hazmat: bool = False
+    consignee: str = ""  # Consignee Number (DATE!T): solo para Ship To de Laredo / Miami
 
 
 @dataclass
@@ -249,6 +252,7 @@ def build_date_row(row: ShipmentRow, ready: str, priority: str = "") -> DateResu
         "Q": ready[:8] if ready else "",
         "R": ready[-5:] if ready else "",
         "S": PICKUP_CLOSE if ready else "",
+        "T": row.consignee,
         "AB": row.name,
         "AC": row.phone,
         "AF": delivery,

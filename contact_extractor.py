@@ -103,6 +103,7 @@ class PageRead:
     zip_code: str = ""
     tracking_value: str = ""  # lo que dice la fila Tracking No (si existe)
     carrier: str = ""  # "BEX" / "VRP" segun el bloque Ship From del propio BOL ("" si no se vio)
+    consignee: str = ""  # Consignee Number (DATE!T) si el Ship To es Laredo / Miami, si no ""
     empty_block: bool = False
     email_near_edge: bool = False
     reasons: list[str] = field(default_factory=list)
@@ -952,9 +953,12 @@ def _read_top(img: Image.Image, source_file: str, page_no: int, contact: bool = 
     zip_votes: list[str] = []
     state_box: Box | None = None
     dest_votes: list[str] = []
+    consignee_votes: list[str] = []
     for img_v, scale, pad in _variants(ship_gray, 2):
         ship_words = _ocr_words(img_v, "--psm 6")
-        dest_votes.append(destinations.destination_rule(" ".join(w.text for w in line) for line in _lines(ship_words)))
+        ship_lines = [" ".join(w.text for w in line) for line in _lines(ship_words)]
+        dest_votes.append(destinations.destination_rule(ship_lines))
+        consignee_votes.append(destinations.consignee_number(ship_lines))
         state, zip_code, how, bbox = parse_ship_to(ship_words)
         state_votes.append((state, None))
         if state:
@@ -965,6 +969,10 @@ def _read_top(img: Image.Image, source_file: str, page_no: int, contact: bool = 
     result.state = vote(state_votes)
     if zip_votes:
         result.zip_code = max(set(zip_votes), key=zip_votes.count)
+    # Un texto tan distintivo como "Conly" casi nunca sale de un error de OCR: basta con una lectura.
+    found = [c for c in consignee_votes if c]
+    if found:
+        result.consignee = max(set(found), key=found.count)
     rules = [r for r in dest_votes if r]
     if rules:
         # Mexico / Latinoamerica: igual que la pestana 1, se entrega en Laredo (TX) o Miami (FL).

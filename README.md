@@ -112,6 +112,12 @@ nota informativa (no se pone en amarillo); solo si las lecturas del OCR no coinc
 **READY DATE opcional.** Si se deja vacío, `Pickup Date`, `Pickup Time`, `Pickup Close Time` y la entrega calculada
 quedan en blanco. Un READY DATE mal escrito sí bloquea la descarga (para no exportar en blanco por un error de dedo).
 
+**Consignee Number (`T` en DATE).** Si el Ship To es la dirección de Laredo (11905 Conly Road, Laredo TX 78045) se
+escribe `147229`; si es la de Miami (12430 NW 25th Street, Miami FL 33182) se escribe `210475`. Cuenta tanto cuando la
+dirección se convierte (país México → Laredo, Latinoamérica → Miami) como cuando ya viene escrita así en el BOL o en la
+Commercial Invoice. En cualquier otra dirección queda vacío. Aplica a las pestañas de contactos e Inbonds y se ve en la
+vista previa (`Consignee No.`). El módulo es `destinations.py`.
+
 **Mensajes de cut off y aviso de push (pestañas de contactos e Inbonds).** Debajo del READY DATE hay un campo
 `POD DATE TIME` donde se escribe, por ejemplo, `11/20/26 0800`. Con eso la app arma los mensajes que antes salían de la
 hoja DATA, listos para copiar: `ARRIVED AT 11/20/26 0800` (del POD), `LEFT PLANT 11/20/26 1456` (del READY DATE) y los

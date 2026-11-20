@@ -531,7 +531,7 @@ def _shipments(job: dict, dims: de.DimsSheet | None, only_verified: bool) -> tup
         rows.append(de.ShipmentRow(
             bol=bol,
             name=contact.name if use else "", email=contact.email if use else "", phone=contact.phone if use else "",
-            state=contact.state, carrier=carrier, hazmat=hazmat,
+            state=contact.state, carrier=carrier, hazmat=hazmat, consignee=contact.consignee,
         ))
         if not sl.normalize_state(contact.state):
             notes["no_state"].append(bol)
@@ -739,6 +739,7 @@ def render(t: Callable[..., str]) -> None:
     preview = pd.DataFrame([{
         t("ct_col_bol"): r.values["B"], t("ct_col_name"): r.values["AB"], t("ct_col_phone"): r.values["AC"],
         t("ct_col_email"): r.values["DU"], t("ct_col_service"): r.service, t("ct_col_delivery"): r.delivery,
+        "Consignee No.": r.values["T"],
     } for r in results])
     st.caption(t("ct_row_count", count=len(results)))
     st.dataframe(preview, width="stretch", hide_index=True)

@@ -70,6 +70,7 @@ class Contact:
     phone: str = ""
     state: str = ""
     zip_code: str = ""
+    consignee: str = ""  # Consignee Number de DATE!T (solo si el Ship To es Laredo o Miami)
     status: str = "fail"
     reasons: list[str] = field(default_factory=list)
     capture: bytes = b""
@@ -202,6 +203,7 @@ def merge_pages(pdfs: Iterable[PdfRead]) -> list[Contact]:
             phone=phone.value,
             state=state.value,
             zip_code=next((p.zip_code for p in pages if p.zip_code), ""),
+            consignee=_majority([p.consignee for p in pages]),
             agreement={
                 "name": name.agreement, "email": email.agreement, "phone": phone.agreement,
                 "state": state.agreement, "bol": bol.agreement,
