@@ -122,16 +122,6 @@ def test_inbond_priority_code_goes_in_fk():
     assert load_workbook(io.BytesIO(blob))["DATE"]["FK2"].value is None
 
 
-def test_normalize_delivery_date_and_time():
-    from datetime import date, time
-
-    assert [de.normalize_delivery_date(v) for v in ("11/20/26", "11/20/2026", "11-20-26", "2026-11-20", date(2026, 11, 20))] == ["11/20/26"] * 5
-    assert [de.normalize_delivery_date(v) for v in ("", None, "abc", "13/40/26")] == [""] * 4
-    assert [de.normalize_time(v) for v in ("1600", "16:00", "4pm", "4:30 PM", time(16, 0))] == ["1600", "1600", "1600", "1630", "1600"]
-    assert (de.normalize_time("930"), de.normalize_time("12am"), de.normalize_time("12pm")) == ("0930", "0000", "1200")
-    assert [de.normalize_time(v) for v in ("", None, "25:00", "x", "12345")] == [""] * 5
-
-
 def test_ready_is_optional_and_leaves_dependent_fields_blank():
     row = de.ShipmentRow("3049901", state="TX", carrier="VRP")
     result = de.build_date_row(row, "")
@@ -139,32 +129,3 @@ def test_ready_is_optional_and_leaves_dependent_fields_blank():
     assert (values["Q"], values["R"], values["S"], values["AF"]) == ("", "", "", "")
     assert values["AG"] == "1600" and values["AK"] == "3D" and values["E"] == "144463"
     assert "no_ready" in result.warnings and result.delivery == ""
-
-
-def test_delivery_priority_row_over_all_over_computed():
-    ready = "11/19/26 1356"
-    row = de.ShipmentRow("3049901", state="TX", carrier="VRP")
-    assert de.build_date_row(row, ready).delivery == "11/24/26"  # calculado (3D, jueves despues del cut-off)
-    everyone = de.build_date_row(row, ready, default_date="11/30/26", default_time="0900")
-    assert (everyone.delivery, everyone.time, everyone.values["AF"], everyone.values["AG"]) == ("11/30/26", "0900", "11/30/26", "0900")
-    own = de.ShipmentRow("3049901", state="TX", carrier="VRP", delivery_date="12/01/26", delivery_time="1130")
-    mine = de.build_date_row(own, ready, default_date="11/30/26", default_time="0900")
-    assert (mine.delivery, mine.time) == ("12/01/26", "1130")
-    blank = de.ShipmentRow("3049901", state="TX", carrier="VRP", delivery_date=de.BLANK, delivery_time=de.BLANK)
-    empty = de.build_date_row(blank, ready, default_date="11/30/26", default_time="0900")
-    assert (empty.delivery, empty.time, empty.values["AF"], empty.values["AG"]) == ("", "", "", "")
-    # Sin READY, la fecha elegida para todos se escribe igual
-    assert de.build_date_row(row, "", default_date="11/30/26").values["AF"] == "11/30/26"
-
-
-def test_workbook_without_ready_and_with_manual_delivery():
-    rows = [
-        de.ShipmentRow("3049901", state="TX", carrier="VRP"),
-        de.ShipmentRow("3049902", state="FL", carrier="BEX", delivery_date="12/02/26", delivery_time="1015"),
-    ]
-    blob, _ = de.build_workbook(rows, "", None, include_data=False, default_date="12/01/26", default_time="0800")
-    sheet = load_workbook(io.BytesIO(blob))["DATE"]
-    assert [sheet[f"Q{n}"].value for n in (2, 3)] == [None, None]
-    assert [sheet[f"S{n}"].value for n in (2, 3)] == [None, None]
-    assert [sheet[f"AF{n}"].value for n in (2, 3)] == ["12/01/26", "12/02/26"]
-    assert [sheet[f"AG{n}"].value for n in (2, 3)] == ["0800", "1015"]

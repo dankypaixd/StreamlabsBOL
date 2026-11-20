@@ -13,7 +13,6 @@ import contact_extractor as ce
 import contact_memory
 import contact_review as cr
 import date_export as de
-import delivery_ui
 import service_levels as sl
 
 PAGE_SIZE = 8
@@ -45,12 +44,16 @@ TEXT: dict[str, dict[str, str]] = {
         "ct_cmp_carrier": "Carrier distinto entre PDF, DIMS y nombre del archivo en: {items}",
         "ct_ready": "READY DATE (opcional, MM/DD/YY HHMM)",
         "ct_ready_help": (
-            "Ejemplo: 11/19/26 1356. Se usa para calcular la fecha de entrega con el cut-off 0800–1700. "
-            "Si lo dejas vacío, esos campos quedan en blanco y puedes poner la entrega a mano."
+            "Ejemplo: 11/19/26 1356. Se usa para calcular la fecha de entrega con el cut-off 0800–1700 y para el "
+            "mensaje LEFT PLANT. Si lo dejas vacío, esos campos quedan en blanco."
         ),
         "ct_ready_invalid": "El READY DATE no es válido. Usa el formato 11/19/26 1356.",
+        "ct_push_warn": (
+            "⚠️ El READY DATE es a las {time}, después de las 17:00 (fuera del cut-off): "
+            "la entrega se está corriendo (push) un día."
+        ),
         "ct_pod": "POD DATE TIME (opcional)",
-        "ct_pod_help": "Ejemplo: 11/19/26 20:54. Se usa para el mensaje ARRIVED AT.",
+        "ct_pod_help": "Ejemplo: 11/20/26 0800. Se usa para el mensaje ARRIVED AT.",
         "ct_weekday": "Incluir el día de la semana (ej. SATURDAY 11/07/26 10:44)",
         "ct_msg_heading": "Mensajes de cut off (para copiar)",
         "ct_msg_both": "Salida y llegada",
@@ -185,12 +188,16 @@ TEXT: dict[str, dict[str, str]] = {
         "ct_cmp_carrier": "Carrier differs between PDF, DIMS and file name in: {items}",
         "ct_ready": "READY DATE (optional, MM/DD/YY HHMM)",
         "ct_ready_help": (
-            "Example: 11/19/26 1356. Used to compute the delivery date with the 0800–1700 cut-off. "
-            "If you leave it empty, those fields stay blank and you can set the delivery by hand."
+            "Example: 11/19/26 1356. Used to compute the delivery date with the 0800–1700 cut-off and for the "
+            "LEFT PLANT message. If you leave it empty, those fields stay blank."
         ),
         "ct_ready_invalid": "The READY DATE is not valid. Use the format 11/19/26 1356.",
+        "ct_push_warn": (
+            "⚠️ The READY DATE is at {time}, after 17:00 (outside the cut-off): "
+            "the delivery is being pushed one day."
+        ),
         "ct_pod": "POD DATE TIME (optional)",
-        "ct_pod_help": "Example: 11/19/26 20:54. Used for the ARRIVED AT message.",
+        "ct_pod_help": "Example: 11/20/26 0800. Used for the ARRIVED AT message.",
         "ct_weekday": "Include the day of the week (e.g. SATURDAY 11/07/26 10:44)",
         "ct_msg_heading": "Cut off messages (to copy)",
         "ct_msg_both": "Left and arrived",
@@ -555,11 +562,17 @@ def _compare_panel(t: Callable[..., str], job: dict, dims: de.DimsSheet) -> None
         st.warning(t("ct_cmp_carrier", items=", ".join(mismatched)))
 
 
-def _messages_panel(t: Callable[..., str], ready: str) -> dict[str, str]:
-    """POD DATE TIME y los mensajes de cut off que antes salian de DATA!O18:O20."""
+def push_warning(t: Callable[..., str], ready: str) -> None:
+    """Aviso cuando el READY DATE cae despues de las 17:00: el dia 0 se corre un dia habil."""
+    if sl.is_after_cutoff(ready):
+        st.warning(t("ct_push_warn", time=f"{sl.parse_ready(ready):%H:%M}"))
+
+
+def _messages_panel(t: Callable[..., str], ready: str, prefix: str = "ct") -> dict[str, str]:
+    """POD DATE TIME y los mensajes de cut off que antes salian de DATA!O18:O20 (la misma en Inbonds)."""
     st.markdown(f"##### {t('ct_msg_heading')}")
-    pod = st.text_input(t("ct_pod"), key="ct_pod", help=t("ct_pod_help"), placeholder="11/19/26 20:54")
-    weekday = st.checkbox(t("ct_weekday"), key="ct_weekday")
+    pod = st.text_input(t("ct_pod"), key=f"{prefix}_pod", help=t("ct_pod_help"), placeholder="11/20/26 0800")
+    weekday = st.checkbox(t("ct_weekday"), key=f"{prefix}_weekday")
     messages = de.cutoff_messages(ready, pod, weekday)
     shown = False
     for key, label in (("both", "ct_msg_both"), ("left", "ct_msg_left"), ("arrived", "ct_msg_arrived")):
@@ -614,6 +627,7 @@ def render(t: Callable[..., str]) -> None:
     ready_invalid = bool(ready_input.strip()) and not ready
     if ready_invalid:
         st.warning(t("ct_ready_invalid"))
+    push_warning(t, ready)
     extras = _messages_panel(t, ready)
 
     if not pdf_files:
@@ -721,23 +735,19 @@ def render(t: Callable[..., str]) -> None:
     if dims is None:
         st.caption(t("ct_no_hazmat_note"))
 
-    st.caption(t("ct_row_count", count=len(shipments)))
-    shipments, default_date, default_time = delivery_ui.render(
-        t, shipments, ready, prefix="ct",
-        extra_columns={
-            t("ct_col_name"): [r.name for r in shipments],
-            t("ct_col_phone"): [r.phone for r in shipments],
-            t("ct_col_email"): [r.email for r in shipments],
-        },
-    )
-    overrides = {"default_date": default_date, "default_time": default_time}
-    date_bytes, results = de.build_workbook(shipments, ready, dims, include_data=False, **overrides)
+    date_bytes, results = de.build_workbook(shipments, ready, dims, include_data=False)
+    preview = pd.DataFrame([{
+        t("ct_col_bol"): r.values["B"], t("ct_col_name"): r.values["AB"], t("ct_col_phone"): r.values["AC"],
+        t("ct_col_email"): r.values["DU"], t("ct_col_service"): r.service, t("ct_col_delivery"): r.delivery,
+    } for r in results])
+    st.caption(t("ct_row_count", count=len(results)))
+    st.dataframe(preview, width="stretch", hide_index=True)
 
     name_input = st.text_input(t("ct_filename"), key="ct_filename", help=t("ct_filename_help"), placeholder=ready or "DATE_IMPORT")
     file_name = de.safe_filename(name_input, ready)
     st.caption(t("ct_download_name", name=file_name))
     if dims is not None:
-        full_bytes, _ = de.build_workbook(shipments, ready, dims, include_data=True, extras=extras, **overrides)
+        full_bytes, _ = de.build_workbook(shipments, ready, dims, include_data=True, extras=extras)
         st.download_button(
             t("ct_download_full"), data=full_bytes, file_name=file_name, mime=XLSX_MIME,
             width="stretch", key="ct_dl_full", type="primary", on_click=_on_download, args=(job,),

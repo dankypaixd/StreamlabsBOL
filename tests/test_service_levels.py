@@ -29,3 +29,10 @@ def test_zip_and_name_fallbacks():
     assert sl.state_from_zip("00979") == "PR"
     assert sl.state_from_name("San Juan 00979 Puerto Rico") == "PR"
     assert sl.state_from_name("Charleston West Virginia") == "WV"
+
+
+def test_is_after_cutoff_only_after_1700():
+    from service_levels import is_after_cutoff
+
+    assert [is_after_cutoff(v) for v in ("11/20/26 1700", "11/20/26 0800", "11/20/26 0730", "")] == [False] * 4
+    assert is_after_cutoff("11/20/26 1701") and is_after_cutoff("11/20/26 2054")

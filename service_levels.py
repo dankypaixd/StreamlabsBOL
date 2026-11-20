@@ -148,6 +148,12 @@ def day_zero(ready: datetime, holidays: frozenset[date] = HOLIDAYS) -> date:
     return next_business_day(day, holidays)
 
 
+def is_after_cutoff(ready: datetime | str | None) -> bool:
+    """True si el READY DATE es despues de las 17:00 (fuera del cut-off): el dia 0 se corre un dia habil."""
+    parsed = parse_ready(ready)
+    return bool(parsed and parsed.time() > CUTOFF_END)
+
+
 def add_business_days(start: date, days: int, holidays: frozenset[date] = HOLIDAYS) -> date:
     current = start
     remaining = days

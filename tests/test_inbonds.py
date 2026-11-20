@@ -104,3 +104,40 @@ def test_invoice_to_mexico_or_latam_uses_the_delivery_state():
     assert (by_bol["3049302"].state, by_bol["3049302"].status) == ("FL", "ok")
     assert "destination_latam" in by_bol["3049302"].reasons
     assert by_bol["3049303"].state == "FL" and not any(r.startswith("destination_") for r in by_bol["3049303"].reasons)
+
+
+def _inbonds_app():
+    import streamlit as st
+
+    import contacts_tab
+    import inbonds_tab
+
+    if "language" not in st.session_state:
+        st.session_state.language = "es"
+
+    def t(key, **values):
+        lang = st.session_state.language
+        text = {**contacts_tab.TEXT[lang], **inbonds_tab.TEXT[lang]}[key]
+        return text.format(**values) if values else text
+
+    inbonds_tab.render(t)
+
+
+@pytest.mark.skipif(shutil.which("tesseract") is None, reason="Tesseract no instalado")
+def test_inbonds_has_arrived_and_left_plant_messages_and_push_warning():
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_function(_inbonds_app, default_timeout=60)
+    at.run()
+    assert not at.exception
+    pod = next(w for w in at.text_input if w.label.startswith("POD DATE TIME"))
+    pod.set_value("11/20/26 0800").run()
+    assert [c.value for c in at.code] == ["ARRIVED AT 11/20/26 0800"]
+    ready = next(w for w in at.text_input if w.label.startswith("READY DATE"))
+    ready.set_value("11/20/26 0800").run()
+    assert [c.value for c in at.code] == [
+        "LEFT PLANT 11/20/26 0800 ARRIVED AT 11/20/26 0800", "LEFT PLANT 11/20/26 0800", "ARRIVED AT 11/20/26 0800",
+    ]
+    assert not any("push" in w.value for w in at.warning)
+    ready.set_value("11/20/26 1730").run()
+    assert any("17:30" in w.value and "push" in w.value for w in at.warning)

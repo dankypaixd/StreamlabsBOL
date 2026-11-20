@@ -112,14 +112,11 @@ nota informativa (no se pone en amarillo); solo si las lecturas del OCR no coinc
 **READY DATE opcional.** Si se deja vacío, `Pickup Date`, `Pickup Time`, `Pickup Close Time` y la entrega calculada
 quedan en blanco. Un READY DATE mal escrito sí bloquea la descarga (para no exportar en blanco por un error de dedo).
 
-**Fecha y hora de entrega a mano** (`delivery_ui.py`, en las pestañas de contactos e Inbonds). Antes de descargar:
-
-- *Fecha / hora de entrega para todos*: una sola selección que se aplica a todos los BOL.
-- Una tabla editable con **Entrega** (`MM/DD/YY`) y **Hora** (`HHMM`) de cada BOL para cambiar solo algunos. Si se
-  borra una celda, ese campo queda vacío.
-- Prioridad: lo escrito en la fila > lo elegido para todos > el cálculo (service level + READY DATE; hora `1600`).
-
-Sin READY DATE y sin fecha elegida, la columna de entrega (`AF`) queda vacía y la hora (`AG`) sigue en `1600`.
+**Mensajes de cut off y aviso de push (pestañas de contactos e Inbonds).** Debajo del READY DATE hay un campo
+`POD DATE TIME` donde se escribe, por ejemplo, `11/20/26 0800`. Con eso la app arma los mensajes que antes salían de la
+hoja DATA, listos para copiar: `ARRIVED AT 11/20/26 0800` (del POD), `LEFT PLANT 11/20/26 1456` (del READY DATE) y los
+dos juntos. Si el READY DATE es después de las 17:00 (fuera del cut-off 0800–1700) sale un aviso de que la entrega se
+está corriendo (push) un día. No cambia nada del Excel: la fecha y hora de entrega siguen saliendo del cálculo.
 
 ## Cambios V9
 

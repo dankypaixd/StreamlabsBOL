@@ -31,7 +31,7 @@ import io
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, time as dtime
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Mapping
 
@@ -78,61 +78,6 @@ def format_ready(value: str | datetime | None) -> str:
     if parsed is None:
         return ""
     return f"{parsed:%m/%d/%y} {parsed:%H%M}"
-
-
-BLANK = "-"  # en una fila: "dejar este campo vacio" (distinto de "usar el calculado")
-
-
-def normalize_delivery_date(value: object) -> str:
-    """Fecha de entrega escrita a mano -> 'MM/DD/YY' ('' si esta vacia o no se entiende).
-
-    Acepta MM/DD/YY, MM/DD/YYYY, MM-DD-YY, YYYY-MM-DD y objetos date/datetime.
-    """
-    if value is None:
-        return ""
-    if isinstance(value, datetime):
-        return f"{value:%m/%d/%y}"
-    if isinstance(value, date):
-        return f"{value:%m/%d/%y}"
-    text = str(value).strip()
-    if not text:
-        return ""
-    iso = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T].*)?", text)
-    if iso:
-        year, month, day = (int(g) for g in iso.groups())
-    else:
-        match = re.fullmatch(r"(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2}|\d{4})", text)
-        if not match:
-            return ""
-        month, day, year = (int(g) for g in match.groups())
-        if year < 100:
-            year += 2000
-    try:
-        return f"{date(year, month, day):%m/%d/%y}"
-    except ValueError:
-        return ""
-
-
-def normalize_time(value: object) -> str:
-    """Hora escrita a mano -> 'HHMM' ('' si esta vacia o no se entiende). Acepta 1600, 16:00, 4pm, 4:30 PM."""
-    if value is None:
-        return ""
-    if isinstance(value, (dtime, datetime)):
-        return f"{value:%H%M}"
-    text = str(value).strip().lower().replace(".", "")
-    if not text:
-        return ""
-    match = re.fullmatch(r"(\d{1,2})(?::?(\d{2}))?\s*(am|pm|a|p)?", text)
-    if not match:
-        return ""
-    hour, minute, meridian = int(match.group(1)), int(match.group(2) or 0), match.group(3)
-    if meridian:
-        if not 1 <= hour <= 12:
-            return ""
-        hour = hour % 12 + (12 if meridian.startswith("p") else 0)
-    if hour > 23 or minute > 59:
-        return ""
-    return f"{hour:02d}{minute:02d}"
 
 
 # ------------------------------------------------------------------ DIMS
@@ -273,43 +218,22 @@ class ShipmentRow:
     state: str = ""
     carrier: str = ""  # BEX / VRP
     hazmat: bool = False
-    delivery_date: str = ""  # a mano para este BOL ('MM/DD/YY'; BLANK = vacio); '' = el global o el calculado
-    delivery_time: str = ""  # a mano para este BOL ('HHMM'; BLANK = vacio); '' = el global o el de siempre
 
 
 @dataclass
 class DateResult:
     bol: str
     service: str
-    delivery: str  # MM/DD/YY (el que se escribe: a mano si lo hay, si no el calculado)
+    delivery: str  # MM/DD/YY
     values: dict[str, object]  # letra de columna -> valor
     warnings: list[str] = field(default_factory=list)
-    time: str = ""  # HHMM de entrega que se escribe
 
 
-def _pick(row_value: str, default_value: str, computed: str) -> str:
-    """Fila > global > calculado. BLANK en la fila o en el global deja el campo vacio."""
-    for value in (row_value, default_value):
-        if value == BLANK:
-            return ""
-        if value:
-            return value
-    return computed
-
-
-def build_date_row(
-    row: ShipmentRow, ready: str, priority: str = "", default_date: str = "", default_time: str = "",
-) -> DateResult:
-    """Fila de DATE para un BOL. `ready` = 'MM/DD/YY HHMM' (ya normalizado; puede venir vacio).
-
-    La entrega y su hora salen, en este orden, de: lo escrito para este BOL, lo elegido para todos
-    (`default_date`, `default_time`) y, por ultimo, el calculo (service level + READY DATE; hora 1600).
-    """
+def build_date_row(row: ShipmentRow, ready: str, priority: str = "") -> DateResult:
+    """Fila de DATE para un BOL. `ready` = 'MM/DD/YY HHMM' (ya normalizado)."""
     warnings: list[str] = []
     service = service_label(row.state)
-    computed = delivery_text(ready, row.state) if service and ready else ""
-    delivery = _pick(row.delivery_date, default_date, computed)
-    delivery_hour = _pick(row.delivery_time, default_time, DELIVERY_TIME)
+    delivery = delivery_text(ready, row.state) if service and ready else ""
     if not service:
         warnings.append("no_service")
     if not ready:
@@ -328,7 +252,7 @@ def build_date_row(
         "AB": row.name,
         "AC": row.phone,
         "AF": delivery,
-        "AG": delivery_hour,
+        "AG": DELIVERY_TIME,
         "AK": service,
         "CO": PRODUCT_CODE,
         "DJ": BILLTO_REF_TYPE,
@@ -336,7 +260,7 @@ def build_date_row(
         "DU": row.email,
         "FK": priority,
     }
-    return DateResult(row.bol, service, delivery, values, warnings, delivery_hour)
+    return DateResult(row.bol, service, delivery, values, warnings)
 
 
 def carrier_from_name(filename: str) -> str:
@@ -410,15 +334,9 @@ def build_workbook(
     include_data: bool = True,
     priority: str = "",
     extras: Mapping[str, str] | None = None,
-    default_date: str = "",
-    default_time: str = "",
 ) -> tuple[bytes, list[DateResult]]:
-    """Devuelve (xlsx, resultados). Con `dims` e `include_data`, el libro trae DATE y DATA.
-
-    `ready` puede ir vacio: Pickup Date/Time/Close y la entrega calculada quedan en blanco.
-    `default_date` / `default_time` se aplican a todos los BOL que no traen su propia entrega a mano.
-    """
-    results = [build_date_row(row, ready, priority, default_date, default_time) for row in shipments]
+    """Devuelve (xlsx, resultados). Con `dims` e `include_data`, el libro trae DATE y DATA."""
+    results = [build_date_row(row, ready, priority) for row in shipments]
     book = Workbook()
     date_ws = book.active
     date_ws.title = "DATE"
