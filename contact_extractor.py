@@ -969,7 +969,9 @@ def _read_top(img: Image.Image, source_file: str, page_no: int, contact: bool = 
                 result.reasons.append(flag)
                 break
 
-    result.capture = _build_capture(img, a, k, att_box, ship_box, bol_box, email_box, phone_boxes, name_boxes, state_box)
+    result.capture = _build_capture(
+        img, a, k, att_box, ship_box, bol_box, email_box, phone_boxes, name_boxes, state_box, ship_only=not contact
+    )
     return result
 
 
@@ -987,6 +989,7 @@ def _build_capture(
     phone_boxes: list[Box],
     name_boxes: list[Box],
     state_box: Box | None,
+    ship_only: bool = False,
 ) -> Image.Image:
     """Recorte tipo 'captura' con lo que se leyo resaltado por colores."""
     rgb = img.copy()
@@ -1011,7 +1014,8 @@ def _build_capture(
     top = max(0, int(a.ship_y0 * k - 10))
     bottom = min(rgb.height, int(a.table_y * k - 2))
     left = max(0, int(a.ship_x0 * k - 12))
-    right = min(rgb.width, int(a.right_x0 * k - 2))
+    # Inbonds: solo el Ship To (se corta antes de la columna del Ship To Attention)
+    right = min(rgb.width, int((a.att_x0 - 6 if ship_only else a.right_x0) * k - 2))
     main = rgb.crop((left, top, right, max(bottom, top + 20)))
 
     head_top = max(0, int(a.lading_y0 * k - 10))
