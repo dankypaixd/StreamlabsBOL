@@ -32,6 +32,7 @@ import numpy as np
 import pytesseract
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
+import destinations
 from service_levels import load_table, state_from_name, state_from_zip
 
 # Cada llamada a tesseract es un proceso aparte: sin esto los hilos se pisan.
@@ -950,8 +951,11 @@ def _read_top(img: Image.Image, source_file: str, page_no: int, contact: bool = 
     state_how: dict[str, set[str]] = defaultdict(set)
     zip_votes: list[str] = []
     state_box: Box | None = None
+    dest_votes: list[str] = []
     for img_v, scale, pad in _variants(ship_gray, 2):
-        state, zip_code, how, bbox = parse_ship_to(_ocr_words(img_v, "--psm 6"))
+        ship_words = _ocr_words(img_v, "--psm 6")
+        dest_votes.append(destinations.destination_rule(" ".join(w.text for w in line) for line in _lines(ship_words)))
+        state, zip_code, how, bbox = parse_ship_to(ship_words)
         state_votes.append((state, None))
         if state:
             state_how[state].add(how)
@@ -961,8 +965,22 @@ def _read_top(img: Image.Image, source_file: str, page_no: int, contact: bool = 
     result.state = vote(state_votes)
     if zip_votes:
         result.zip_code = max(set(zip_votes), key=zip_votes.count)
+    rules = [r for r in dest_votes if r]
+    if rules:
+        # Mexico / Latinoamerica: igual que la pestana 1, se entrega en Laredo (TX) o Miami (FL).
+        rule = max(set(rules), key=rules.count)
+        state = destinations.DESTINATION_STATE[rule]
+        sure = len(rules) == len(dest_votes) and len(set(rules)) == 1
+        result.state = FieldRead(
+            value=state, agreement=1.0 if sure else 0.5, reads=[(state, None)], weights=[1.0], support=1.0
+        )
+        result.zip_code = ""
+        result.reasons.append(f"destination_{rule}")
+        if not sure:
+            result.reasons.append("destination_unsure")
+        state_box = None
     # La marca de "estado deducido" solo si ninguna lectura vio el codigo escrito.
-    hows = state_how.get(result.state.value, set())
+    hows: set[str] = set() if rules else state_how.get(result.state.value, set())
     if hows and "code" not in hows:
         for how, flag in (("fixed", "state_fixed"), ("zip", "state_from_zip"), ("name", "state_from_name")):
             if how in hows:

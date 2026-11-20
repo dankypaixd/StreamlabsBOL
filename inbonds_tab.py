@@ -21,8 +21,10 @@ from PIL import Image
 import bol_generator as bg
 import contact_extractor as ce
 import contact_review as cr
+import destinations
 import contacts_tab as ct
 import date_export as de
+import delivery_ui
 import service_levels as sl
 
 XLSX_MIME = ct.XLSX_MIME
@@ -197,14 +199,20 @@ def contacts_from_invoice(name: str, content: bytes) -> list[cr.Contact]:
     """Un Contact (solo BOL, estado y carrier) por cada Air Waybill de la Commercial Invoice."""
     contacts: list[cr.Contact] = []
     for record in bg.extract_basic_records(content):
-        state, zip_code, how = state_from_lines(record.ship_to_lines)
+        rule, state = destinations.destination_state(record.ship_to_lines)
+        if rule:
+            zip_code, how = "", ""  # Mexico / Latinoamerica: Laredo (TX) o Miami (FL), como en la pestana 1
+        else:
+            state, zip_code, how = state_from_lines(record.ship_to_lines)
         contact = cr.Contact(
             key=record.air_waybill, bol=record.air_waybill, source_file=name, pages=[record.source_page],
             carrier_sources={k: v for k, v in (("pdf", record.source_format), ("file", cr.carrier_from_filename(name))) if v},
             state=state, zip_code=zip_code,
             agreement={"state": 1.0, "bol": 1.0},
         )
-        if how == "zip":
+        if rule:
+            contact.reasons.append(f"destination_{rule}")
+        elif how == "zip":
             contact.reasons.append("state_from_zip")
         elif how == "name":
             contact.reasons.append("state_from_name")
@@ -359,7 +367,8 @@ def render(t: Callable[..., str]) -> None:
     pdf_files = st.file_uploader(t("ib_upload"), type=["pdf"], accept_multiple_files=True, key="ib_pdfs")
     ready_input = st.text_input(t("ct_ready"), key="ib_ready", help=t("ct_ready_help"))
     ready = de.format_ready(ready_input) if ready_input.strip() else ""
-    if ready_input.strip() and not ready:
+    ready_invalid = bool(ready_input.strip()) and not ready
+    if ready_invalid:
         st.warning(t("ct_ready_invalid"))
     if not pdf_files:
         return
@@ -430,8 +439,8 @@ def render(t: Callable[..., str]) -> None:
     pending_doubt, pending_fail = len(groups["doubt"]), len(groups["fail"])
     if pending_doubt or pending_fail:
         st.warning(t("ct_pending_warn", doubt=pending_doubt, fail=pending_fail))
-    if not ready:
-        st.info(t("ct_need_ready"))
+    if ready_invalid:
+        st.info(t("ct_need_ready"))  # un READY mal escrito no se exporta en blanco por error
         return
 
     by_bol: dict[str, cr.Contact] = {}
@@ -450,14 +459,17 @@ def render(t: Callable[..., str]) -> None:
     if no_carrier:
         st.warning(t("ct_no_carrier_warn", items=", ".join(no_carrier[:20])))
 
-    blob, results = de.build_workbook(shipments, ready, None, include_data=False, priority=de.PRIORITY_INBOND)
-    st.caption(t("ib_priority_note") + " " + t("ct_row_count", count=len(results)))
-    st.dataframe(pd.DataFrame([{
-        t("ct_col_bol"): r.values["B"], "Carrier": next((s.carrier for s in shipments if s.bol == r.bol), ""),
-        t("ct_col_service"): r.service, t("ct_col_delivery"): r.delivery, "FK": r.values["FK"],
-    } for r in results]), width="stretch", hide_index=True)
+    st.caption(t("ib_priority_note") + " " + t("ct_row_count", count=len(shipments)))
+    shipments, default_date, default_time = delivery_ui.render(
+        t, shipments, ready, prefix="ib", priority=de.PRIORITY_INBOND,
+        extra_columns={"Carrier": [s.carrier for s in shipments]},
+    )
+    blob, results = de.build_workbook(
+        shipments, ready, None, include_data=False, priority=de.PRIORITY_INBOND,
+        default_date=default_date, default_time=default_time,
+    )
 
-    name_input = st.text_input(t("ct_filename"), key="ib_filename", help=t("ct_filename_help"), placeholder=ready)
+    name_input = st.text_input(t("ct_filename"), key="ib_filename", help=t("ct_filename_help"), placeholder=ready or "DATE_IMPORT")
     file_name = de.safe_filename(name_input, ready)
     st.caption(t("ct_download_name", name=file_name))
     st.download_button(

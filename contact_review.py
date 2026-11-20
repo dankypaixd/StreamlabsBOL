@@ -222,7 +222,10 @@ def merge_pages(pdfs: Iterable[PdfRead]) -> list[Contact]:
         # Banderas por pagina
         if picked or any("email_by_name" in p.reasons for p in pages):
             contact.reasons.append("email_by_name")
-        for flag in ("state_fixed", "state_from_zip", "state_from_name"):
+        for flag in (
+            "state_fixed", "state_from_zip", "state_from_name",
+            "destination_mexico", "destination_latam", "destination_unsure",
+        ):
             if any(flag in p.reasons for p in pages):
                 contact.reasons.append(flag)
         if any(p.email_near_edge for p in pages):
@@ -377,7 +380,7 @@ def classify(
         for fname, limit in thresholds:
             if contact.agreement.get(fname, 0.0) < limit:
                 soft.append(f"lowagree:{fname}")
-    informational = {"bol_not_in_data", "bol_not_in_dims"}
+    informational = {"bol_not_in_data", "bol_not_in_dims", "destination_mexico", "destination_latam"}
     flags = [r for r in contact.reasons if r not in informational and not r.startswith("memory_exact")]
     if memory_exact:
         # La coincidencia exacta con memoria absorbe dudas del OCR, no las de BOL/estado.
@@ -431,7 +434,11 @@ def reclassify(contact: Contact, memory: Memory | None = None, need_contact: boo
     """Vuelve a calcular el estado de una fila editada a mano por el usuario."""
     contact.phone = normalize_phone(contact.phone) if contact.phone else ""
     contact.agreement = {k: 1.0 for k in contact.agreement}  # lo escribio una persona
+    destination = {"destination_mexico": "TX", "destination_latam": "FL"}
     contact.reasons = [
-        r for r in contact.reasons if r.startswith(("memory_fix", "bol_not_in_data", "carrier_"))
+        r for r in contact.reasons
+        if r.startswith(("memory_fix", "bol_not_in_data", "carrier_"))
+        # La nota de destino solo sigue valiendo si el estado no se cambio a mano.
+        or (r in destination and normalize_state(contact.state) == destination[r])
     ]
     return classify(contact, memory, check_zip=False, need_contact=need_contact)  # el estado lo reviso una persona

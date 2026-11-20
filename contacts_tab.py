@@ -13,6 +13,7 @@ import contact_extractor as ce
 import contact_memory
 import contact_review as cr
 import date_export as de
+import delivery_ui
 import service_levels as sl
 
 PAGE_SIZE = 8
@@ -42,8 +43,11 @@ TEXT: dict[str, dict[str, str]] = {
         "ct_cmp_only_dims": "Están en el DIMS pero no en los PDF: {items}",
         "ct_cmp_only_pdf": "Están en los PDF pero no en el DIMS: {items}",
         "ct_cmp_carrier": "Carrier distinto entre PDF, DIMS y nombre del archivo en: {items}",
-        "ct_ready": "READY DATE (MM/DD/YY HHMM)",
-        "ct_ready_help": "Ejemplo: 11/19/26 1356. Se usa para calcular la fecha de entrega con el cut-off 0800–1700.",
+        "ct_ready": "READY DATE (opcional, MM/DD/YY HHMM)",
+        "ct_ready_help": (
+            "Ejemplo: 11/19/26 1356. Se usa para calcular la fecha de entrega con el cut-off 0800–1700. "
+            "Si lo dejas vacío, esos campos quedan en blanco y puedes poner la entrega a mano."
+        ),
         "ct_ready_invalid": "El READY DATE no es válido. Usa el formato 11/19/26 1356.",
         "ct_pod": "POD DATE TIME (opcional)",
         "ct_pod_help": "Ejemplo: 11/19/26 20:54. Se usa para el mensaje ARRIVED AT.",
@@ -114,7 +118,7 @@ TEXT: dict[str, dict[str, str]] = {
         "ct_no_carrier_warn": "Sin carrier (BEX/VRP), no se puede poner el Shipper Number: {items}",
         "ct_download_date": "Descargar solo la hoja DATE",
         "ct_download_full": "Descargar libro completo (DATE + DATA)",
-        "ct_need_ready": "Escribe un READY DATE válido para poder descargar.",
+        "ct_need_ready": "Corrige el READY DATE (o déjalo vacío) para poder descargar.",
         "ct_no_hazmat_note": "Sin DIMS, el HAZMAT (DK) sale en 0 para todos y no se arma la hoja DATA.",
         "ct_files_changed_dims": "Cambiaste los archivos o el DIMS. Presiona “Leer BOL” para procesarlos de nuevo.",
         "ct_memory_error": "No se pudo guardar el aprendizaje ahora; se reintentará la próxima vez.",
@@ -137,6 +141,9 @@ TEXT: dict[str, dict[str, str]] = {
         "r_state_from_zip": "El estado no estaba escrito: se dedujo del código postal.",
         "r_state_from_name": "El estado no estaba como código: se tomó del nombre escrito.",
         "r_state_zip_mismatch": "El estado no coincide con el código postal.",
+        "r_destination_mexico": "Destino en México: se entrega en Laredo, TX (como en la pestaña 1).",
+        "r_destination_latam": "Destino en Latinoamérica: se entrega en Miami, FL (como en la pestaña 1).",
+        "r_destination_unsure": "Las lecturas no se pusieron de acuerdo sobre si el destino es México/Latinoamérica: revisa la captura.",
         "r_tracking_mismatch": "El BOL del encabezado no coincide con el de la fila Tracking No.",
         "r_bol_snapped": "El BOL se ajustó al más parecido que está en el DIMS.",
         "r_bol_not_in_data": "Este BOL no está en el DIMS.",
@@ -176,8 +183,11 @@ TEXT: dict[str, dict[str, str]] = {
         "ct_cmp_only_dims": "In the DIMS but not in the PDFs: {items}",
         "ct_cmp_only_pdf": "In the PDFs but not in the DIMS: {items}",
         "ct_cmp_carrier": "Carrier differs between PDF, DIMS and file name in: {items}",
-        "ct_ready": "READY DATE (MM/DD/YY HHMM)",
-        "ct_ready_help": "Example: 11/19/26 1356. Used to compute the delivery date with the 0800–1700 cut-off.",
+        "ct_ready": "READY DATE (optional, MM/DD/YY HHMM)",
+        "ct_ready_help": (
+            "Example: 11/19/26 1356. Used to compute the delivery date with the 0800–1700 cut-off. "
+            "If you leave it empty, those fields stay blank and you can set the delivery by hand."
+        ),
         "ct_ready_invalid": "The READY DATE is not valid. Use the format 11/19/26 1356.",
         "ct_pod": "POD DATE TIME (optional)",
         "ct_pod_help": "Example: 11/19/26 20:54. Used for the ARRIVED AT message.",
@@ -248,7 +258,7 @@ TEXT: dict[str, dict[str, str]] = {
         "ct_no_carrier_warn": "No carrier (BEX/VRP), the Shipper Number cannot be set: {items}",
         "ct_download_date": "Download the DATE sheet only",
         "ct_download_full": "Download full workbook (DATE + DATA)",
-        "ct_need_ready": "Enter a valid READY DATE to enable the downloads.",
+        "ct_need_ready": "Fix the READY DATE (or leave it empty) to enable the downloads.",
         "ct_no_hazmat_note": "Without a DIMS, HAZMAT (DK) is 0 for every row and the DATA sheet is not built.",
         "ct_files_changed_dims": "The files or the DIMS changed. Press “Read BOLs” to process them again.",
         "ct_memory_error": "Could not save what was learned right now; it will be retried next time.",
@@ -271,6 +281,9 @@ TEXT: dict[str, dict[str, str]] = {
         "r_state_from_zip": "The state was not written: it was deduced from the ZIP code.",
         "r_state_from_name": "The state was not a code: it was taken from the written name.",
         "r_state_zip_mismatch": "The state does not match the ZIP code.",
+        "r_destination_mexico": "Destination in Mexico: delivered in Laredo, TX (same as tab 1).",
+        "r_destination_latam": "Destination in Latin America: delivered in Miami, FL (same as tab 1).",
+        "r_destination_unsure": "The reads disagree on whether the destination is Mexico/Latin America: check the capture.",
         "r_tracking_mismatch": "The header BOL does not match the Tracking No row.",
         "r_bol_snapped": "The BOL was adjusted to the closest one in the DIMS.",
         "r_bol_not_in_data": "This BOL is not in the DIMS.",
@@ -598,7 +611,8 @@ def render(t: Callable[..., str]) -> None:
         t("ct_ready"), value=(dims.ready if dims else ""), key=f"ct_ready_{data_hash}", help=t("ct_ready_help"),
     )
     ready = de.format_ready(ready_input) if ready_input.strip() else ""
-    if ready_input.strip() and not ready:
+    ready_invalid = bool(ready_input.strip()) and not ready
+    if ready_invalid:
         st.warning(t("ct_ready_invalid"))
     extras = _messages_panel(t, ready)
 
@@ -692,8 +706,8 @@ def render(t: Callable[..., str]) -> None:
     if pending_doubt or pending_fail:
         st.warning(t("ct_pending_warn", doubt=pending_doubt, fail=pending_fail))
 
-    if not ready:
-        st.info(t("ct_need_ready"))
+    if ready_invalid:
+        st.info(t("ct_need_ready"))  # un READY mal escrito no se exporta en blanco por error
         return
     shipments, notes = _shipments(job, dims, only_verified)
     if notes["missing"]:
@@ -707,19 +721,23 @@ def render(t: Callable[..., str]) -> None:
     if dims is None:
         st.caption(t("ct_no_hazmat_note"))
 
-    date_bytes, results = de.build_workbook(shipments, ready, dims, include_data=False)
-    preview = pd.DataFrame([{
-        t("ct_col_bol"): r.values["B"], t("ct_col_name"): r.values["AB"], t("ct_col_phone"): r.values["AC"],
-        t("ct_col_email"): r.values["DU"], t("ct_col_service"): r.service, t("ct_col_delivery"): r.delivery,
-    } for r in results])
-    st.caption(t("ct_row_count", count=len(results)))
-    st.dataframe(preview, width="stretch", hide_index=True)
+    st.caption(t("ct_row_count", count=len(shipments)))
+    shipments, default_date, default_time = delivery_ui.render(
+        t, shipments, ready, prefix="ct",
+        extra_columns={
+            t("ct_col_name"): [r.name for r in shipments],
+            t("ct_col_phone"): [r.phone for r in shipments],
+            t("ct_col_email"): [r.email for r in shipments],
+        },
+    )
+    overrides = {"default_date": default_date, "default_time": default_time}
+    date_bytes, results = de.build_workbook(shipments, ready, dims, include_data=False, **overrides)
 
-    name_input = st.text_input(t("ct_filename"), key="ct_filename", help=t("ct_filename_help"), placeholder=ready)
+    name_input = st.text_input(t("ct_filename"), key="ct_filename", help=t("ct_filename_help"), placeholder=ready or "DATE_IMPORT")
     file_name = de.safe_filename(name_input, ready)
     st.caption(t("ct_download_name", name=file_name))
     if dims is not None:
-        full_bytes, _ = de.build_workbook(shipments, ready, dims, include_data=True, extras=extras)
+        full_bytes, _ = de.build_workbook(shipments, ready, dims, include_data=True, extras=extras, **overrides)
         st.download_button(
             t("ct_download_full"), data=full_bytes, file_name=file_name, mime=XLSX_MIME,
             width="stretch", key="ct_dl_full", type="primary", on_click=_on_download, args=(job,),
