@@ -14,7 +14,9 @@ from typing import Callable
 
 import fitz  # PyMuPDF
 import pandas as pd
+import pytesseract
 import streamlit as st
+from PIL import Image
 
 import bol_generator as bg
 import contact_extractor as ce
@@ -82,7 +84,6 @@ TEXT: dict[str, dict[str, str]] = {
     },
 }
 
-_STATE_ZIP = re.compile(r"\b([A-Za-z]{2})\.?\s*,?\s*(\d{5})(?:-\d{4})?\b")
 
 
 # ------------------------------------------------------------------ lectura
@@ -104,28 +105,88 @@ def pdf_kind(content: bytes) -> str:
 def state_from_lines(lines: tuple[str, ...] | list[str]) -> tuple[str, str, str]:
     """(estado, zip, como) a partir de las lineas del Ship To de una Commercial Invoice.
 
-    ``como`` es "code" (escrito), "zip" (deducido del codigo postal) o "name" (nombre completo).
+    Entiende "DALLAS, TX 75201" y las provincias de Canada ("Mississauga, ON L5N 8E9").
+    ``como`` es "code" (escrito), "fixed" (corregido por una confusion de OCR, p. ej. 0/O),
+    "zip" (deducido del codigo postal) o "name" (nombre completo, p. ej. Puerto Rico).
     """
-    text = "\n".join(lines)
-    for match in reversed(list(_STATE_ZIP.finditer(text))):
-        state = sl.normalize_state(match.group(1))
-        if state:
-            return state, match.group(2), "code"
-    zips = re.findall(r"\b(\d{5})(?:-\d{4})?\b", text)
-    for zip_code in reversed(zips):
-        state = sl.state_from_zip(zip_code)
-        if state:
-            return state, zip_code, "zip"
-    state = sl.state_from_name(text)
+    rows = [re.sub(r"\s+", " ", line).strip() for line in lines if line and line.strip()]
+    for row in reversed(rows):
+        for regex in (ce.STATE_RE, ce.CA_POSTAL_RE):
+            match = regex.search(row.upper() if regex is ce.CA_POSTAL_RE else row)
+            if not match:
+                continue
+            code, fixed = ce._fix_state_token(match.group(1))
+            if code:
+                return code, (match.group(2) if regex is ce.STATE_RE else ""), "fixed" if fixed else "code"
+    for row in reversed(rows):
+        match = ce.ZIP_RE.search(row)
+        if match:
+            code = sl.state_from_zip(match.group(1))
+            if code:
+                return code, match.group(1), "zip"
+    state = sl.state_from_name("\n".join(rows))
     return (state, "", "name") if state else ("", "", "")
 
 
-def _ci_capture(content: bytes, page_number: int) -> bytes:
+def ship_to_box(words: list[tuple[str, float, float, float, float]], width: float, height: float):
+    """Caja (x0, y0, x1, y1) del bloque SHIP TO de una Commercial Invoice, o None si no se ve.
+
+    ``words`` = (texto, x0, y0, x1, y1). El bloque va desde la etiqueta "SHIP TO" hasta la fila
+    "HEART ORDER NO" y, a la derecha, hasta la columna "SOLD TO" / "SHIP VIA".
+    """
+    def tok(text: str) -> str:
+        return re.sub(r"[^a-z]", "", text.lower())
+
+    ordered = sorted(words, key=lambda w: (round(w[2] / 6), w[1]))
+    label = None
+    for index, word in enumerate(ordered[:-1]):
+        nxt = ordered[index + 1]
+        same_line = abs(nxt[2] - word[2]) < max(8.0, 0.8 * (word[4] - word[2]))
+        if tok(word[0]) == "ship" and tok(nxt[0]) == "to" and same_line and word[1] < 0.5 * width:
+            label = word  # si hubiera varios, vale el de mas abajo
+    if label is None:
+        return None
+    sold = [w[1] for w in words if tok(w[0]) in ("sold", "via") and w[1] > label[1] + 0.15 * width]
+    right = (min(sold) - 6) if sold else 0.55 * width
+    heart = [w[2] for w in words if tok(w[0]) == "heart" and w[2] > label[4]]
+    bottom = (min(heart) - 4) if heart else label[2] + 0.30 * height
+    return (max(0.0, label[1] - 24), max(0.0, label[2] - 14), min(width, right), min(height, bottom))
+
+
+def ci_ship_to_capture(content: bytes, page_number: int, dpi: int = 150) -> bytes:
+    """JPEG con solo el Ship To de la pagina de la Commercial Invoice (si no lo ubica, la parte de arriba)."""
+    import io
+
     doc = fitz.open(stream=content, filetype="pdf")
     try:
         page = doc[page_number - 1]
-        clip = fitz.Rect(0, 0, page.rect.width, page.rect.height * 0.42)
-        return page.get_pixmap(clip=clip, dpi=100).tobytes("jpg")
+        top = fitz.Rect(0, 0, page.rect.width, page.rect.height * 0.55)
+        pix = page.get_pixmap(clip=top, dpi=dpi, alpha=False)
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        scale = dpi / 72
+        native = [w for w in page.get_text("words") if w[1] < top.y1]
+        if len(native) >= 15:
+            words = [(w[4], w[0] * scale, w[1] * scale, w[2] * scale, w[3] * scale) for w in native]
+        else:  # pagina escaneada: se lee con OCR solo la parte de arriba
+            data = pytesseract.image_to_data(img, config="--psm 6", output_type=pytesseract.Output.DICT)
+            words = []
+            for text, left, upper, width, height, conf in zip(
+                data["text"], data["left"], data["top"], data["width"], data["height"], data["conf"]
+            ):
+                try:
+                    keep = text.strip() and float(conf) >= 25
+                except (TypeError, ValueError):
+                    keep = False
+                if keep:
+                    words.append((text, float(left), float(upper), float(left + width), float(upper + height)))
+        box = ship_to_box(words, img.width, img.height)
+        if box:
+            img = img.crop(tuple(int(v) for v in box))
+        if img.width > 900:
+            img = img.resize((900, int(img.height * 900 / img.width)), Image.LANCZOS)
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=85)
+        return buffer.getvalue()
     except Exception:
         return b""
     finally:
@@ -142,12 +203,13 @@ def contacts_from_invoice(name: str, content: bytes) -> list[cr.Contact]:
             carrier_sources={k: v for k, v in (("pdf", record.source_format), ("file", cr.carrier_from_filename(name))) if v},
             state=state, zip_code=zip_code,
             agreement={"state": 1.0, "bol": 1.0},
-            capture=_ci_capture(content, record.source_page),
         )
         if how == "zip":
             contact.reasons.append("state_from_zip")
         elif how == "name":
             contact.reasons.append("state_from_name")
+        elif how == "fixed":
+            contact.reasons.append("state_fixed")
         cr.set_carrier(contact)
         contact.ocr = {"state": state, "bol": contact.bol}
         contacts.append(contact)
@@ -232,13 +294,16 @@ def _confirm_all_ok() -> None:
 # --------------------------------------------------------------------- tarjeta
 
 
-def _card(t: Callable[..., str], contact: cr.Contact, ready: str, *, ns: str) -> None:
+def _card(t: Callable[..., str], contact: cr.Contact, ready: str, *, ns: str, job: dict) -> None:
     k = f"{ns}_{ct._wk(contact.key)}"
     key_k = ct._wk(contact.key)
     with st.container(border=True):
         st.markdown(f"**{contact.bol or contact.key}** · {contact.source_file} · p. {', '.join(map(str, contact.pages))}")
         left, right = st.columns([1.15, 1])
         with left:
+            if not contact.capture and job["kinds"].get(contact.source_file) == "ci":
+                # solo el Ship To; se genera al mostrar la tarjeta (no para los 70+ verdes)
+                contact.capture = ci_ship_to_capture(job["files"][contact.source_file], contact.pages[0])
             if contact.capture:
                 st.image(contact.capture, width="stretch")
             else:
@@ -312,6 +377,7 @@ def render(t: Callable[..., str]) -> None:
         bar.empty()
         st.session_state.ib_job = {
             "hash": files_hash, "contacts": {c.key: c for c in contacts}, "kinds": kinds, "errors": errors,
+            "files": dict(files),
         }
 
     job = st.session_state.get("ib_job")
@@ -346,7 +412,7 @@ def render(t: Callable[..., str]) -> None:
         if not groups[key]:
             st.caption(t("ct_none"))
         for contact in ct._paged(t, groups[key], f"ib_{key}"):
-            _card(t, contact, ready, ns=f"ib_{key}")
+            _card(t, contact, ready, ns=f"ib_{key}", job=job)
 
     st.markdown(f"##### {t('ib_sec_ok')} ({len(groups['ok'])})")
     if groups["ok"]:
