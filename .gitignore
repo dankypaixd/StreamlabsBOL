@@ -1,0 +1,4 @@
+.bol_memory/
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
