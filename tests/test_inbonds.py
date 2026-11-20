@@ -104,3 +104,57 @@ def test_invoice_to_mexico_or_latam_uses_the_delivery_state():
     assert (by_bol["3049302"].state, by_bol["3049302"].status) == ("FL", "ok")
     assert "destination_latam" in by_bol["3049302"].reasons
     assert by_bol["3049303"].state == "FL" and not any(r.startswith("destination_") for r in by_bol["3049303"].reasons)
+
+
+def _inbonds_app():
+    import streamlit as st
+
+    import contacts_tab
+    import inbonds_tab
+
+    if "language" not in st.session_state:
+        st.session_state.language = "es"
+
+    def t(key, **values):
+        lang = st.session_state.language
+        text = {**contacts_tab.TEXT[lang], **inbonds_tab.TEXT[lang]}[key]
+        return text.format(**values) if values else text
+
+    inbonds_tab.render(t)
+
+
+@pytest.mark.skipif(shutil.which("tesseract") is None, reason="Tesseract no instalado")
+def test_inbonds_has_arrived_and_left_plant_messages_and_push_warning():
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_function(_inbonds_app, default_timeout=60)
+    at.run()
+    assert not at.exception
+    pod = next(w for w in at.text_input if w.label.startswith("POD DATE TIME"))
+    pod.set_value("11/20/26 0800").run()
+    assert [c.value for c in at.code] == ["ARRIVED AT 11/20/26 0800"]
+    ready = next(w for w in at.text_input if w.label.startswith("READY DATE"))
+    ready.set_value("11/20/26 0800").run()
+    assert [c.value for c in at.code] == [
+        "LEFT PLANT 11/20/26 0800 ARRIVED AT 11/20/26 0800", "LEFT PLANT 11/20/26 0800", "ARRIVED AT 11/20/26 0800",
+    ]
+    assert not any("push" in w.value for w in at.warning)
+    ready.set_value("11/20/26 1730").run()
+    assert any("17:30" in w.value and "push" in w.value for w in at.warning)
+
+
+def test_inbonds_export_has_consignee_number_for_laredo_and_miami():
+    cases = {
+        "3049401": ["CORP SA DE CV", "CALLE 5 No 10", "MONTERREY, NL 66260", "MX"],
+        "3049402": ["EMPRESA LTDA", "RUA X 10", "SAO PAULO SP 01310-100", "BR"],
+        "3049403": ["Corporativo Galvan S.C", "11905 Conly Road", "Laredo TX 78045", "USA"],
+        "3049404": ["ACME TEST LLC", "100 MAIN STREET", "Houston, TX 77001", "US"],
+    }
+    contacts, _, errors = ib.read_files([(f"VRP_{b}.pdf", make_ci_pdf(b, lines)) for b, lines in cases.items()])
+    assert errors == {}
+    by_bol = {c.bol: c for c in contacts}
+    assert [by_bol[b].consignee for b in cases] == ["147229", "210475", "147229", ""]
+    rows = [de.ShipmentRow(b, state=by_bol[b].state, carrier="VRP", consignee=by_bol[b].consignee) for b in cases]
+    blob, _ = de.build_workbook(rows, "11/19/26 1356", None, include_data=False, priority=de.PRIORITY_INBOND)
+    sheet = load_workbook(io.BytesIO(blob))["DATE"]
+    assert [sheet[f"T{n}"].value for n in (2, 3, 4, 5)] == ["147229", "210475", "147229", None]

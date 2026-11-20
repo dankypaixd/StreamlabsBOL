@@ -77,3 +77,29 @@ def destination_state(lines: Iterable[str]) -> tuple[str, str]:
     """(regla, estado de entrega) o ("", "") si la direccion no cambia."""
     rule = destination_rule(lines)
     return (rule, DESTINATION_STATE[rule]) if rule else ("", "")
+
+
+# ---------------------------------------------------------------- Consignee Number (DATE!T)
+
+# Numero de consignatario que lleva cada una de las dos direcciones de entrega de la pestana 1.
+CONSIGNEE_NUMBER = {"mexico": "147229", "latam": "210475"}
+
+
+def address_key(lines: Iterable[str]) -> str:
+    """"mexico" / "latam" si el Ship To *ya es* una de las dos direcciones de entrega (por su texto), si no "".
+
+    Se buscan las palabras distintivas, no la direccion completa, porque el OCR puede cambiar alguna letra.
+    """
+    text = re.sub(r"\s+", " ", " ".join(line for line in lines if line)).lower()
+    if "conly" in text or ("11905" in text and ("laredo" in text or "78045" in text)):
+        return "mexico"  # 11905 Conly Road, Laredo TX 78045
+    if ("12430" in text and ("25th" in text or "33182" in text or "miami" in text)) or ("dsv" in text and "miami" in text):
+        return "latam"  # 12430 NW 25th Street, Miami FL 33182 (US_MIAMI DSV Inc.)
+    return ""
+
+
+def consignee_number(lines: Iterable[str]) -> str:
+    """Consignee Number del Ship To: el de Laredo o el de Miami, ya sea porque la direccion se convierte
+    (pais de Mexico / Latinoamerica) o porque ya viene escrita asi. Cualquier otra direccion: ""."""
+    rows = list(lines)
+    return CONSIGNEE_NUMBER.get(destination_rule(rows) or address_key(rows), "")

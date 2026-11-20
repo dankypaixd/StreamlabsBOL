@@ -5,7 +5,7 @@ import fitz
 
 
 def make_bol_pdf(pages: list[dict]) -> bytes:
-    """Cada pagina: bol, name, email, phone, city_line, empty (bool), country (por defecto "US"). Distribucion tipo VRP."""
+    """Cada pagina: bol, name, email, phone, city_line, empty (bool), country (por defecto "US"), address (por defecto "100 MAIN STREET"). Distribucion tipo VRP."""
     doc = fitz.open()
     for spec in pages:
         page = doc.new_page(width=612, height=792)
@@ -19,7 +19,7 @@ def make_bol_pdf(pages: list[dict]) -> bytes:
             for i, line in enumerate(spec["ship_from"]):
                 page.insert_text((20, 106 + i * 12), line, fontname="helv", fontsize=8)
         page.insert_text((14, 143), "Ship To:", fontname="hebo", fontsize=10)
-        for i, line in enumerate(["ACME TEST LLC", "100 MAIN STREET", spec["city_line"], spec.get("country", "US")]):
+        for i, line in enumerate(["ACME TEST LLC", spec.get("address", "100 MAIN STREET"), spec["city_line"], spec.get("country", "US")]):
             page.insert_text((20, 158 + i * 13), line, fontname="helv", fontsize=8)
         page.insert_text((204, 143), "Ship To Attention:", fontname="hebo", fontsize=10)
         if not spec.get("empty"):
