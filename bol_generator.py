@@ -448,7 +448,8 @@ def apply_destination_rule(record: BolRecord) -> BolRecord:
     )
 
 
-def extract_unique_records(ci_pdf: bytes) -> list[BolRecord]:
+def _collect_records(ci_pdf: bytes) -> dict[str, BolRecord]:
+    """Un registro por Air Waybill (une lo que traiga cada pagina). Sin exigir que este completo."""
     document = fitz.open(stream=ci_pdf, filetype="pdf")
     records: dict[str, BolRecord] = {}
 
@@ -497,6 +498,22 @@ def extract_unique_records(ci_pdf: bytes) -> list[BolRecord]:
             )
 
     document.close()
+    return records
+
+
+def extract_basic_records(ci_pdf: bytes) -> list[BolRecord]:
+    """Air Waybill, formato (BEX/VRP) y Ship To original de cada pagina, aunque falten otros campos.
+
+    Lo usa la pestana Inbonds, que solo necesita el BOL, el estado y el carrier.
+    """
+    return sorted(
+        _collect_records(ci_pdf).values(),
+        key=lambda record: (0, int(record.air_waybill)) if record.air_waybill.isdigit() else (1, record.air_waybill),
+    )
+
+
+def extract_unique_records(ci_pdf: bytes) -> list[BolRecord]:
+    records = _collect_records(ci_pdf)
 
     if not records:
         raise BolExtractionError("No se encontro ningun Air Waybill en el PDF.")

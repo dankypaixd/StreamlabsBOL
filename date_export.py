@@ -19,8 +19,11 @@ Columnas de DATE que se llenan (el resto queda vacio, como en el template):
     DJ BilltoRefType           "RAX"
     DK BilltoRef               "1" si algun renglon del BOL en DATA tiene HAZMAT = Y, si no "0"
     DU Consignee Email         correo            <- Ship To Attention
+    FK Priority Code           "INBD" (solo pestana Inbonds)
 
-En DATA se rellenan Q (SERVICE LEVEL) y R (DELIVERY DATE) en cada renglon del BOL.
+El DATA del libro se arma con el DIMS que sube el usuario (cualquier orden de columnas, con o sin
+TRACKER / HAZMAT / RACK) en el orden del template; se rellenan N2 (READY DATE), N3:N4 (POD DATE TIME),
+Q (SERVICE LEVEL) y R (DELIVERY DATE) en cada renglon del BOL.
 """
 from __future__ import annotations
 
@@ -46,7 +49,23 @@ DELIVERY_TIME = "1600"
 PRODUCT_CODE = "HPDOM"
 BILLTO_REF_TYPE = "RAX"
 
-DATA_COLS = {"carrier": "A", "barcode": "C", "hazmat": "J", "ready": "N", "service": "Q", "delivery": "R"}
+PRIORITY_INBOND = "INBD"
+
+# Orden de las columnas de DATA en el template. TRACKER no existe en el template: va al final (S).
+DATA_LAYOUT = [
+    ("carrier", "A"), ("trailer", "B"), ("barcode", "C"), ("length", "D"), ("width", "E"), ("height", "F"),
+    ("weight", "G"), ("box", "H"), ("rack", "I"), ("hazmat", "J"), ("scanned", "K"), ("time_in", "L"),
+    ("time_out", "M"), ("ready", "N"), ("service", "Q"), ("delivery", "R"), ("tracker", "S"),
+]
+# Encabezados del DIMS (sin importar mayusculas, espacios ni signos) -> campo
+DIMS_HEADERS = {
+    "carrier": "carrier", "trailer": "trailer", "barcode": "barcode", "length": "length", "width": "width",
+    "height": "height", "tracker": "tracker", "tracking": "tracker", "trackingno": "tracker",
+    "actualweight": "weight", "weight": "weight", "box": "box", "boxes": "box", "rack": "rack",
+    "hazmat": "hazmat", "scannedtime": "scanned", "timein": "time_in", "timeout": "time_out",
+    "readydate": "ready",
+}
+YES_VALUES = {"Y", "YES", "SI", "SÍ", "X", "1", "TRUE", "HAZMAT"}
 
 
 def load_headers() -> dict[str, list[str]]:
@@ -61,30 +80,39 @@ def format_ready(value: str | datetime | None) -> str:
     return f"{parsed:%m/%d/%y} {parsed:%H%M}"
 
 
-# ------------------------------------------------------------------ DATA
+# ------------------------------------------------------------------ DIMS
 
 
 @dataclass
-class DataSheet:
-    """Lo que el usuario pego en DATA (o la salida del convertidor de dimensiones)."""
+class DimsSheet:
+    """Las dimensiones que se reciben (DIMS), leidas por nombre de columna.
 
-    headers: list[str]
-    rows: list[list[object]]  # columnas A..R
-    ready: str = ""  # N2, tal cual
+    Los archivos llegan con mas o menos columnas (TRACKER, HAZMAT, RACK a veces estan y a veces
+    no), asi que nunca se usa la posicion: solo se exige Barcode.
+    """
+
+    rows: list[dict[str, object]]  # un dict por renglon (campos de DIMS_HEADERS)
+    found: list[str] = field(default_factory=list)  # campos que traia el archivo
+    ready: str = ""  # READY DATE, solo si el archivo trae esa columna
     carriers: dict[str, str] = field(default_factory=dict)  # barcode -> BEX/VRP
-    hazmat: dict[str, bool] = field(default_factory=dict)  # barcode -> hay HAZMAT = Y
-    sheet_name: str = "DATA"
+    hazmat: dict[str, bool] = field(default_factory=dict)  # barcode -> hay HAZMAT
+    trackers: dict[str, list[str]] = field(default_factory=dict)  # barcode -> trackers
+    sheet_name: str = "DIMS"
 
     @property
     def barcodes(self) -> list[str]:
         seen: dict[str, None] = {}
-        for code in self._codes():
-            seen.setdefault(code, None)
+        for row in self.rows:
+            seen.setdefault(barcode_text(row.get("barcode")), None)
         return list(seen)
 
-    def _codes(self) -> list[str]:
-        idx = column_index_from_string(DATA_COLS["barcode"]) - 1
-        return [barcode_text(row[idx]) if idx < len(row) else "" for row in self.rows]
+    @property
+    def missing(self) -> list[str]:
+        """Campos opcionales que este archivo no traia (solo informativo)."""
+        return [name for name in ("carrier", "hazmat", "tracker") if name not in self.found]
+
+
+DataSheet = DimsSheet  # nombre anterior
 
 
 def barcode_text(value: object) -> str:
@@ -95,66 +123,87 @@ def barcode_text(value: object) -> str:
     return re.sub(r"\.0$", "", str(value).strip())
 
 
+def _norm(text: object) -> str:
+    return re.sub(r"\W+", "", str(text if text is not None else "")).lower()
+
+
 def _clean(value: object) -> object:
-    return None if value == "" else value
+    if isinstance(value, str):
+        value = value.strip()
+    return None if value in ("", None) else value
 
 
-def read_data_sheet(content: bytes, filename: str = "DATA.xlsx") -> DataSheet:
-    """Lee DATA desde .xlsx/.xlsm (hoja 'DATA' o la primera) o .csv."""
+def _grid_from_file(content: bytes, filename: str) -> tuple[list[list[object]], str]:
     name = filename.lower()
     if name.endswith(".csv"):
         import csv
 
         text = content.decode("utf-8-sig", errors="replace")
-        grid = [list(row) for row in csv.reader(io.StringIO(text))]
-        sheet_name = "DATA"
-    elif name.endswith(".xls"):
+        return [list(row) for row in csv.reader(io.StringIO(text))], "DIMS"
+    if name.endswith(".xls"):
         import pandas as pd
 
         frame = pd.read_excel(io.BytesIO(content), header=None, dtype=object)
-        grid = frame.where(frame.notna(), None).values.tolist()
-        sheet_name = "DATA"
-    else:
-        book = load_workbook(io.BytesIO(content), data_only=True, read_only=True)
-        sheet = book["DATA"] if "DATA" in book.sheetnames else book.worksheets[0]
-        sheet_name = sheet.title
-        grid = [list(row) for row in sheet.iter_rows(values_only=True)]
+        return frame.where(frame.notna(), None).values.tolist(), "DIMS"
+    book = load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+    try:
+        sheets = {sheet.title.strip().upper(): sheet for sheet in book.worksheets}
+        order = [sheets[n] for n in ("DIMS", "DATA") if n in sheets] + list(book.worksheets)
+        for sheet in order:
+            grid = [list(row) for row in sheet.iter_rows(values_only=True)]
+            if _header_row(grid) is not None:
+                return grid, sheet.title
+        return [list(row) for row in book.worksheets[0].iter_rows(values_only=True)], book.worksheets[0].title
+    finally:
         book.close()
+
+
+def _header_row(grid: list[list[object]]) -> int | None:
+    for index, row in enumerate(grid[:15]):
+        if any(_norm(cell) == "barcode" for cell in row):
+            return index
+    return None
+
+
+def read_dims(content: bytes, filename: str = "DIMS.xlsx") -> DimsSheet:
+    """Lee un DIMS (.xlsx/.xlsm/.xls/.csv). Solo exige la columna Barcode."""
+    grid, sheet_name = _grid_from_file(content, filename)
     if not grid:
         raise ValueError("empty")
-
-    headers = [("" if h is None else str(h)) for h in grid[0][:18]]
-    headers += [""] * (18 - len(headers))
-    expected = load_headers()["DATA"]
-    if _norm(headers[2]) != _norm(expected[2]):
+    header_at = _header_row(grid)
+    if header_at is None:
         raise ValueError("barcode_header")
 
-    rows: list[list[object]] = []
-    for raw in grid[1:]:
-        row = list(raw[:18]) + [None] * (18 - len(raw[:18]))
-        row = [_clean(v) for v in row]
-        if row[2] in (None, ""):
+    columns: dict[str, int] = {}
+    for position, cell in enumerate(grid[header_at]):
+        key = DIMS_HEADERS.get(_norm(cell))
+        if key and key not in columns:  # si un encabezado se repite, vale el primero
+            columns[key] = position
+
+    rows: list[dict[str, object]] = []
+    for raw in grid[header_at + 1:]:
+        row = {key: _clean(raw[pos]) if pos < len(raw) else None for key, pos in columns.items()}
+        if row.get("barcode") is None:
             continue  # sin barcode no es una caja
         rows.append(row)
 
-    sheet_data = DataSheet(headers=expected, rows=rows, sheet_name=sheet_name)
-    ready_col = column_index_from_string(DATA_COLS["ready"]) - 1
-    first_ready = grid[1][ready_col] if len(grid) > 1 and ready_col < len(grid[1]) else None
-    sheet_data.ready = format_ready(first_ready) if first_ready else ""
-    carrier_col = column_index_from_string(DATA_COLS["carrier"]) - 1
-    hazmat_col = column_index_from_string(DATA_COLS["hazmat"]) - 1
+    dims = DimsSheet(rows=rows, found=list(columns), sheet_name=sheet_name)
+    first_ready = next((r["ready"] for r in rows if r.get("ready")), None)
+    dims.ready = format_ready(first_ready) if first_ready else ""
     for row in rows:
-        code = barcode_text(row[2])
-        carrier = str(row[carrier_col] or "").strip().upper()
-        if carrier and code not in sheet_data.carriers:
-            sheet_data.carriers[code] = carrier
-        if str(row[hazmat_col] or "").strip().upper() == "Y":
-            sheet_data.hazmat[code] = True
-    return sheet_data
+        code = barcode_text(row["barcode"])
+        carrier = str(row.get("carrier") or "").strip().upper()
+        if carrier and code not in dims.carriers:
+            dims.carriers[code] = carrier
+        if str(row.get("hazmat") or "").strip().upper() in YES_VALUES:
+            dims.hazmat[code] = True
+        tracker = str(row.get("tracker") or "").strip()
+        if tracker:
+            dims.trackers.setdefault(code, []).append(tracker)
+    return dims
 
 
-def _norm(text: str) -> str:
-    return re.sub(r"\W+", "", text or "").lower()
+read_data_sheet = read_dims  # nombre anterior
 
 
 # ------------------------------------------------------------------ DATE
@@ -180,7 +229,7 @@ class DateResult:
     warnings: list[str] = field(default_factory=list)
 
 
-def build_date_row(row: ShipmentRow, ready: str) -> DateResult:
+def build_date_row(row: ShipmentRow, ready: str, priority: str = "") -> DateResult:
     """Fila de DATE para un BOL. `ready` = 'MM/DD/YY HHMM' (ya normalizado)."""
     warnings: list[str] = []
     service = service_label(row.state)
@@ -209,6 +258,7 @@ def build_date_row(row: ShipmentRow, ready: str) -> DateResult:
         "DJ": BILLTO_REF_TYPE,
         "DK": "1" if row.hazmat else "0",
         "DU": row.email,
+        "FK": priority,
     }
     return DateResult(row.bol, service, delivery, values, warnings)
 
@@ -242,36 +292,100 @@ def _write_date_sheet(ws, results: Iterable[DateResult]) -> None:
         ws.column_dimensions[letter].width = 30
 
 
-def _write_data_sheet(ws, data: DataSheet, results: Mapping[str, DateResult]) -> None:
-    ws.append(data.headers)
-    service_idx = column_index_from_string(DATA_COLS["service"]) - 1
-    delivery_idx = column_index_from_string(DATA_COLS["delivery"]) - 1
-    for row in data.rows:
-        out = list(row)
-        result = results.get(barcode_text(out[2]))
+def _write_data_sheet(ws, dims: DimsSheet, results: Mapping[str, DateResult], ready: str, extras: Mapping[str, str]) -> None:
+    """DATA con el orden del template, mas READY DATE, POD DATE TIME y los mensajes de cut off."""
+    headers = list(load_headers()["DATA"]) + ["TRACKER"]
+    ws.append(headers)
+    letter_of = dict(DATA_LAYOUT)
+    width = len(headers)
+    for number, row in enumerate(dims.rows, start=2):
+        line: list[object] = [None] * width
+        for key, letter in DATA_LAYOUT:
+            if key in ("ready", "service", "delivery"):
+                continue
+            value = row.get(key)
+            if value is not None:
+                line[column_index_from_string(letter) - 1] = value
+        result = results.get(barcode_text(row.get("barcode")))
         if result:
-            out[service_idx] = result.service or None
-            out[delivery_idx] = result.delivery or None
-        ws.append(out)
+            line[column_index_from_string(letter_of["service"]) - 1] = result.service or None
+            line[column_index_from_string(letter_of["delivery"]) - 1] = result.delivery or None
+        ws.append(line)
+    ws["N2"] = ready or None
+    if extras.get("pod"):
+        ws["N3"] = "POD DATE TIME"
+        ws["N4"] = extras["pod"]
+    row_no = 18
+    for label in ("both", "left", "arrived"):
+        if extras.get(label):
+            ws[f"N{row_no}"] = "CUT OFF MESSAGE"
+            ws[f"O{row_no}"] = extras[label]
+            row_no += 1
     ws.freeze_panes = "A2"
-    for index in range(1, 19):
+    for index in range(1, width + 1):
         ws.column_dimensions[get_column_letter(index)].width = 14
+    ws.column_dimensions["O"].width = 48
 
 
 def build_workbook(
     shipments: Iterable[ShipmentRow],
     ready: str,
-    data: DataSheet | None = None,
+    dims: DimsSheet | None = None,
     include_data: bool = True,
+    priority: str = "",
+    extras: Mapping[str, str] | None = None,
 ) -> tuple[bytes, list[DateResult]]:
-    """Devuelve (xlsx, resultados). Con `data` e `include_data`, el libro trae DATE y DATA."""
-    results = [build_date_row(row, ready) for row in shipments]
+    """Devuelve (xlsx, resultados). Con `dims` e `include_data`, el libro trae DATE y DATA."""
+    results = [build_date_row(row, ready, priority) for row in shipments]
     book = Workbook()
     date_ws = book.active
     date_ws.title = "DATE"
     _write_date_sheet(date_ws, results)
-    if data is not None and include_data:
-        _write_data_sheet(book.create_sheet("DATA"), data, {r.bol: r for r in results})
+    if dims is not None and include_data:
+        _write_data_sheet(book.create_sheet("DATA"), dims, {r.bol: r for r in results}, ready, extras or {})
     buffer = io.BytesIO()
     book.save(buffer)
     return buffer.getvalue(), results
+
+
+# ---------------------------------------------------------- mensajes y nombre
+
+
+_DATE_IN_TEXT = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{2,4})")
+
+
+def _weekday(text: str) -> str:
+    match = _DATE_IN_TEXT.search(text or "")
+    if not match:
+        return ""
+    month, day, year = (int(g) for g in match.groups())
+    year += 2000 if year < 100 else 0
+    try:
+        return datetime(year, month, day).strftime("%A").upper()
+    except ValueError:
+        return ""
+
+
+def _with_weekday(text: str, enabled: bool) -> str:
+    """'11/07/26 10:44' -> 'SATURDAY 11/07/26 10:44' (como los ejemplos de tu hoja DATA)."""
+    day = _weekday(text) if enabled else ""
+    return f"{day} {text}" if day else text
+
+
+def cutoff_messages(ready: str, pod: str, weekday: bool = False) -> dict[str, str]:
+    """Los tres mensajes que armaba DATA!O18:O20 con READY DATE (N2) y POD DATE TIME (N4)."""
+    ready = re.sub(r"\s+", " ", ready or "").strip()
+    pod = re.sub(r"\s+", " ", pod or "").strip()
+    left = f"LEFT PLANT {_with_weekday(ready, weekday)}" if ready else ""
+    arrived = f"ARRIVED AT {_with_weekday(pod, weekday)}" if pod else ""
+    both = f"{left} {arrived}" if left and arrived else ""
+    return {"both": both, "left": left, "arrived": arrived}
+
+
+def safe_filename(name: str, fallback: str, extension: str = ".xlsx") -> str:
+    """Nombre de archivo valido. Sin nombre, usa `fallback` (el READY DATE)."""
+    text = re.sub(r"\.(xlsx|xlsm|xls)$", "", (name or "").strip(), flags=re.IGNORECASE)
+    text = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "-", text).strip(" .-")
+    if not text:
+        text = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "-", (fallback or "").strip()).strip(" .-")
+    return f"{text or 'DATE_IMPORT'}{extension}"

@@ -1,6 +1,17 @@
-[theme]
-base = "light"
+# Dos temas completos: la app usa el del dispositivo y se puede cambiar en ⋮ -> Settings -> Theme.
+# Todos los componentes (alertas, bloques de codigo, archivos subidos, listas) cambian juntos,
+# asi no queda texto blanco sobre fondo claro.
+[theme.light]
 primaryColor = "#1F6FEB"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#17202A"
+
+[theme.dark]
+primaryColor = "#4C9AFF"
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#171C24"
+textColor = "#FAFAFA"
 
 [server]
 maxUploadSize = 300

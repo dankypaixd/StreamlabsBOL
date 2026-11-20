@@ -31,14 +31,92 @@ def test_date_sheet_matches_template_columns():
     assert sheet["AK4"].value is None and "no_service" in results[2].warnings
 
 
-def test_full_workbook_fills_service_and_delivery_in_data(tmp_path):
-    data = de.DataSheet(
-        headers=de.load_headers()["DATA"],
-        rows=[["VRP", "VRP", 3049901, 48, 40, 40, 100, 1, None, None, "Nov 19 2026", None, None, "11/19/26 1356", None, None, None, None]],
-        ready="11/19/26 1356",
+def _dims_xlsx(headers, rows, sheet="VRP 53458"):
+    from openpyxl import Workbook
+
+    book = Workbook()
+    ws = book.active
+    ws.title = sheet
+    ws.append(headers)
+    for row in rows:
+        ws.append(row)
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
+
+
+def test_dims_reads_by_header_with_any_column_set():
+    # con TRACKER y HAZMAT vacio (como el archivo recibido)
+    full = _dims_xlsx(
+        ["CARRIER", "TRAILER", "Barcode", "Length", "Width", "Height", "TRACKER", "Actual Weight", "BOX", "RACK", "HAZMAT", "Scanned Time"],
+        [["VRP ", 53458, 3049264, 51, 36, 86, "j1514571", 1000, 1, None, None, "Nov 20 2026"],
+         ["VRP ", 53458, 3049264, 51, 36, 86, "j1513918", 1000, 1, None, None, "Nov 20 2026"],
+         ["VRP ", 53458, 3049280, 49.8, 42.3, 15.3, None, 100, 1, None, "Y", "Nov 20 2026"]],
     )
-    blob, _ = de.build_workbook(_rows()[:1], data.ready, data)
+    dims = de.read_dims(full, "dims.xlsx")
+    assert dims.barcodes == ["3049264", "3049280"] and dims.carriers == {"3049264": "VRP", "3049280": "VRP"}
+    assert dims.hazmat == {"3049280": True} and dims.trackers["3049264"] == ["j1514571", "j1513918"]
+    assert dims.rows[0]["weight"] == 1000 and dims.missing == []
+
+    # sin HAZMAT ni TRACKER ni RACK y con las columnas en otro orden (como el template)
+    short = _dims_xlsx(["Barcode", "CARRIER", "Length", "Width", "Height", "Actual Weight", "BOX"],
+                       [[98162916, "BEX", 48, 40, 40, 107, 2]], sheet="DATA")
+    dims = de.read_dims(short, "x.xlsx")
+    assert dims.barcodes == ["98162916"] and dims.carriers == {"98162916": "BEX"}
+    assert dims.hazmat == {} and sorted(dims.missing) == ["hazmat", "tracker"]
+
+    csv = b"CARRIER,Barcode,HAZMAT\nBEX,98162916,\nBEX,98162932,YES\n"
+    dims = de.read_dims(csv, "dims.csv")
+    assert dims.hazmat == {"98162932": True}
+
+
+def test_dims_without_barcode_is_rejected():
+    import pytest
+
+    with pytest.raises(ValueError, match="barcode_header"):
+        de.read_dims(_dims_xlsx(["CARRIER", "Length"], [["BEX", 1]]), "x.xlsx")
+
+
+def test_full_workbook_builds_data_from_dims_in_template_order():
+    dims = de.read_dims(
+        _dims_xlsx(
+            ["CARRIER", "TRAILER", "Barcode", "Length", "Width", "Height", "TRACKER", "Actual Weight", "BOX", "RACK", "HAZMAT", "Scanned Time"],
+            [["VRP ", 53458, 3049901, 48, 40, 40, "j1", 100, 1, None, None, "Nov 19 2026"]],
+        ),
+        "d.xlsx",
+    )
+    extras = {"pod": "11/19/26 20:54", **de.cutoff_messages("11/19/26 1356", "11/19/26 20:54")}
+    blob, _ = de.build_workbook(_rows()[:1], "11/19/26 1356", dims, extras=extras)
     book = load_workbook(io.BytesIO(blob))
     assert book.sheetnames == ["DATE", "DATA"]
-    assert (book["DATA"]["Q2"].value, book["DATA"]["R2"].value) == ("3D", "11/24/26")
-    assert book["DATA"]["N2"].value == "11/19/26 1356"  # lo del usuario queda intacto
+    data = book["DATA"]
+    assert [data.cell(1, c).value for c in (1, 3, 7, 14, 17, 18)] == [
+        "CARRIER", "Barcode", "Actual Weight", "READY DATE", "SERVICE LEVEL", "DELIVERY DATE"]
+    assert data["G2"].value == 100  # el peso va en G aunque el DIMS traiga TRACKER antes
+    assert data["S1"].value == "TRACKER" and data["S2"].value == "j1"
+    assert (data["Q2"].value, data["R2"].value) == ("3D", "11/24/26")
+    assert data["N2"].value == "11/19/26 1356" and data["N3"].value == "POD DATE TIME" and data["N4"].value == "11/19/26 20:54"
+    assert data["O18"].value == "LEFT PLANT 11/19/26 1356 ARRIVED AT 11/19/26 20:54"
+
+
+def test_cutoff_messages_like_the_template():
+    assert de.cutoff_messages("11/19/26 1356", "11/19/26 20:54") == {
+        "both": "LEFT PLANT 11/19/26 1356 ARRIVED AT 11/19/26 20:54",
+        "left": "LEFT PLANT 11/19/26 1356", "arrived": "ARRIVED AT 11/19/26 20:54"}
+    assert de.cutoff_messages("11/19/26 1356", "")["both"] == ""
+    assert de.cutoff_messages("", "11/07/26 10:44", weekday=True)["arrived"] == "ARRIVED AT SATURDAY 11/07/26 10:44"
+
+
+def test_file_name_defaults_to_ready_date():
+    assert de.safe_filename("", "11/19/26 1356") == "11-19-26 1356.xlsx"
+    assert de.safe_filename("Mi envio.xlsx", "11/19/26 1356") == "Mi envio.xlsx"
+    assert de.safe_filename("a/b:c", "x") == "a-b-c.xlsx"
+    assert de.safe_filename("", "") == "DATE_IMPORT.xlsx"
+
+
+def test_inbond_priority_code_goes_in_fk():
+    blob, _ = de.build_workbook(_rows()[:1], "11/19/26 1356", priority=de.PRIORITY_INBOND)
+    sheet = load_workbook(io.BytesIO(blob))["DATE"]
+    assert sheet["FK1"].value == "Priority Code" and sheet["FK2"].value == "INBD"
+    blob, _ = de.build_workbook(_rows()[:1], "11/19/26 1356")
+    assert load_workbook(io.BytesIO(blob))["DATE"]["FK2"].value is None

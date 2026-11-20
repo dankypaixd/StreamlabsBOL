@@ -14,6 +14,10 @@ def make_bol_pdf(pages: list[dict]) -> bytes:
         page.insert_text((490, 66), spec["bol"], fontname="helv", fontsize=9)
         page.insert_text((412, 80), "Page:", fontname="hebo", fontsize=9)
         page.insert_text((490, 80), "1 OF 2", fontname="helv", fontsize=9)
+        if spec.get("ship_from"):
+            page.insert_text((14, 92), "Ship From:", fontname="hebo", fontsize=10)
+            for i, line in enumerate(spec["ship_from"]):
+                page.insert_text((20, 106 + i * 12), line, fontname="helv", fontsize=8)
         page.insert_text((14, 143), "Ship To:", fontname="hebo", fontsize=10)
         for i, line in enumerate(["ACME TEST LLC", "100 MAIN STREET", spec["city_line"], "US"]):
             page.insert_text((20, 158 + i * 13), line, fontname="helv", fontsize=8)
@@ -28,6 +32,23 @@ def make_bol_pdf(pages: list[dict]) -> bytes:
         page.insert_text((170, 232), "Description", fontname="hebo", fontsize=8)
         page.insert_text((14, 248), spec["bol"], fontname="helv", fontsize=8)
         page.draw_line((14, 255), (598, 255))
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+def make_ci_pdf(awb: str, ship_to: list[str]) -> bytes:
+    """Commercial Invoice sintetica tipo VRP (texto nativo): Air Waybill arriba a la derecha y Ship To."""
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_text((14, 40), "Commercial Invoice", fontname="hebo", fontsize=14)
+    page.insert_text((340, 70), "Air Waybill", fontname="hebo", fontsize=9)
+    page.insert_text((420, 70), awb, fontname="helv", fontsize=9)
+    page.insert_text((340, 84), "Packing ID", fontname="hebo", fontsize=9)
+    page.insert_text((420, 84), "PK12345", fontname="helv", fontsize=9)
+    page.insert_text((14, 120), "Ship To", fontname="hebo", fontsize=10)
+    for i, line in enumerate(ship_to):
+        page.insert_text((14, 136 + i * 11), line, fontname="helv", fontsize=8)
     data = doc.tobytes()
     doc.close()
     return data

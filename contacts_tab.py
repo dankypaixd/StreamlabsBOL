@@ -27,17 +27,36 @@ TEXT: dict[str, dict[str, str]] = {
             "Bill of Lading, calcula el service level y la fecha de entrega, y prepara el Excel para importar."
         ),
         "ct_upload_pdfs": "Sube los PDF de los BOL (puedes subir varios)",
-        "ct_upload_data": "Sube tu DATA (opcional: .xlsx, .xlsm o .csv)",
+        "ct_upload_data": "Sube los DIMS (.xlsx, .xlsm o .csv)",
         "ct_data_help": (
-            "Si lo subes, el Excel trae tus datos de DATA tal cual, un renglón en DATE por cada Barcode, "
-            "el carrier, el HAZMAT y el READY DATE (celda N2)."
+            "Son las dimensiones que recibes. Sirven para comparar los BOL con los de los PDF, confirmar el carrier "
+            "(BEX/VRP), tomar el HAZMAT y armar la hoja DATA del Excel. Pueden traer más o menos columnas: "
+            "solo hace falta Barcode."
         ),
-        "ct_data_ok": "DATA leído: {boxes} renglones, {bols} BOL distintos.",
-        "ct_data_error": "No se pudo leer DATA: {error}",
-        "ct_data_header_error": "la columna C debe llamarse Barcode",
+        "ct_data_ok": "DIMS leído: {boxes} renglones, {bols} BOL distintos.",
+        "ct_data_error": "No se pudo leer el DIMS: {error}",
+        "ct_data_header_error": "no encontré una columna llamada Barcode",
+        "ct_data_missing_cols": "Este DIMS no trae: {items}. No pasa nada, se trabaja sin eso.",
+        "ct_cmp_ok": "✅ Los {count} BOL del DIMS son los mismos que los de los PDF.",
+        "ct_cmp_diff": "⚠️ Los BOL del DIMS y de los PDF no son iguales: DIMS {dims}, PDF {pdf}.",
+        "ct_cmp_only_dims": "Están en el DIMS pero no en los PDF: {items}",
+        "ct_cmp_only_pdf": "Están en los PDF pero no en el DIMS: {items}",
+        "ct_cmp_carrier": "Carrier distinto entre PDF, DIMS y nombre del archivo en: {items}",
         "ct_ready": "READY DATE (MM/DD/YY HHMM)",
         "ct_ready_help": "Ejemplo: 11/19/26 1356. Se usa para calcular la fecha de entrega con el cut-off 0800–1700.",
         "ct_ready_invalid": "El READY DATE no es válido. Usa el formato 11/19/26 1356.",
+        "ct_pod": "POD DATE TIME (opcional)",
+        "ct_pod_help": "Ejemplo: 11/19/26 20:54. Se usa para el mensaje ARRIVED AT.",
+        "ct_weekday": "Incluir el día de la semana (ej. SATURDAY 11/07/26 10:44)",
+        "ct_msg_heading": "Mensajes de cut off (para copiar)",
+        "ct_msg_both": "Salida y llegada",
+        "ct_msg_left": "Solo salida (LEFT PLANT)",
+        "ct_msg_arrived": "Solo llegada (ARRIVED AT)",
+        "ct_msg_none": "Escribe el READY DATE (y el POD DATE TIME si lo tienes) para ver los mensajes.",
+        "ct_filename": "Nombre del archivo (opcional)",
+        "ct_filename_help": "Si lo dejas vacío, el archivo se guarda con el READY DATE.",
+        "ct_download_name": "Se guardará como: {name}",
+        "ct_carrier": "Carrier",
         "ct_read": "Leer BOL",
         "ct_reading": "Leyendo {name}...",
         "ct_no_tesseract": (
@@ -89,14 +108,15 @@ TEXT: dict[str, dict[str, str]] = {
             "importe un dato sin revisar. Desmárcalo para exportar también lo leído en los dudosos."
         ),
         "ct_pending_warn": "Sin confirmar: {doubt} dudosos y {fail} incompletos.",
-        "ct_missing_in_pdf": "BOL de DATA sin PDF: {items}",
-        "ct_extra_in_pdf": "BOL de los PDF que no están en DATA (no se incluyen): {items}",
+        "ct_missing_in_pdf": "BOL del DIMS sin PDF: {items}",
+        "ct_extra_in_pdf": "BOL de los PDF que no están en el DIMS (no se incluyen): {items}",
         "ct_no_service_warn": "Sin service level por falta de estado: {items}",
-        "ct_no_carrier_warn": "Sin carrier (BEX/VRP) en DATA o en el nombre del PDF: {items}",
-        "ct_download_date": "Descargar hoja DATE para importar",
+        "ct_no_carrier_warn": "Sin carrier (BEX/VRP), no se puede poner el Shipper Number: {items}",
+        "ct_download_date": "Descargar solo la hoja DATE",
         "ct_download_full": "Descargar libro completo (DATE + DATA)",
         "ct_need_ready": "Escribe un READY DATE válido para poder descargar.",
-        "ct_no_hazmat_note": "Sin DATA, el HAZMAT (DK) sale en 0 para todos.",
+        "ct_no_hazmat_note": "Sin DIMS, el HAZMAT (DK) sale en 0 para todos y no se arma la hoja DATA.",
+        "ct_files_changed_dims": "Cambiaste los archivos o el DIMS. Presiona “Leer BOL” para procesarlos de nuevo.",
         "ct_memory_error": "No se pudo guardar el aprendizaje ahora; se reintentará la próxima vez.",
         "ct_row_count": "{count} filas en DATE.",
         "r_empty_block": "El bloque Ship To Attention está vacío en el PDF.",
@@ -118,8 +138,10 @@ TEXT: dict[str, dict[str, str]] = {
         "r_state_from_name": "El estado no estaba como código: se tomó del nombre escrito.",
         "r_state_zip_mismatch": "El estado no coincide con el código postal.",
         "r_tracking_mismatch": "El BOL del encabezado no coincide con el de la fila Tracking No.",
-        "r_bol_snapped": "El BOL se ajustó al más parecido que está en DATA.",
-        "r_bol_not_in_data": "Este BOL no está en tu DATA.",
+        "r_bol_snapped": "El BOL se ajustó al más parecido que está en el DIMS.",
+        "r_bol_not_in_data": "Este BOL no está en el DIMS.",
+        "r_carrier_mismatch": "El carrier no coincide entre el PDF, el DIMS y el nombre del archivo: revisa cuál es.",
+        "r_carrier_unknown": "No se pudo saber si es BEX o VRP: elige el carrier para poner el Shipper Number.",
         "r_memory_fix:email": "El correo se corrigió con uno ya confirmado antes.",
         "r_memory_fix:domain": "El dominio del correo se corrigió con uno ya confirmado antes.",
         "r_memory_fix:name": "El nombre se corrigió con el ya confirmado para ese correo.",
@@ -139,17 +161,36 @@ TEXT: dict[str, dict[str, str]] = {
             "Bill of Lading, calculates the service level and delivery date, and prepares the import Excel."
         ),
         "ct_upload_pdfs": "Upload the BOL PDFs (you can upload several)",
-        "ct_upload_data": "Upload your DATA (optional: .xlsx, .xlsm or .csv)",
+        "ct_upload_data": "Upload the DIMS (.xlsx, .xlsm or .csv)",
         "ct_data_help": (
-            "If you upload it, the Excel keeps your DATA as is, one DATE row per Barcode, "
-            "the carrier, HAZMAT and the READY DATE (cell N2)."
+            "The dimensions you receive. They are used to compare the BOLs with the PDFs, confirm the carrier "
+            "(BEX/VRP), take HAZMAT and build the DATA sheet. They may have more or fewer columns: "
+            "only Barcode is required."
         ),
-        "ct_data_ok": "DATA read: {boxes} rows, {bols} distinct BOLs.",
-        "ct_data_error": "Could not read DATA: {error}",
-        "ct_data_header_error": "column C must be named Barcode",
+        "ct_data_ok": "DIMS read: {boxes} rows, {bols} distinct BOLs.",
+        "ct_data_error": "Could not read the DIMS: {error}",
+        "ct_data_header_error": "I could not find a column named Barcode",
+        "ct_data_missing_cols": "This DIMS has no: {items}. That is fine, it works without them.",
+        "ct_cmp_ok": "✅ The {count} BOLs in the DIMS are the same as the ones in the PDFs.",
+        "ct_cmp_diff": "⚠️ The BOLs in the DIMS and in the PDFs are not the same: DIMS {dims}, PDF {pdf}.",
+        "ct_cmp_only_dims": "In the DIMS but not in the PDFs: {items}",
+        "ct_cmp_only_pdf": "In the PDFs but not in the DIMS: {items}",
+        "ct_cmp_carrier": "Carrier differs between PDF, DIMS and file name in: {items}",
         "ct_ready": "READY DATE (MM/DD/YY HHMM)",
         "ct_ready_help": "Example: 11/19/26 1356. Used to compute the delivery date with the 0800–1700 cut-off.",
         "ct_ready_invalid": "The READY DATE is not valid. Use the format 11/19/26 1356.",
+        "ct_pod": "POD DATE TIME (optional)",
+        "ct_pod_help": "Example: 11/19/26 20:54. Used for the ARRIVED AT message.",
+        "ct_weekday": "Include the day of the week (e.g. SATURDAY 11/07/26 10:44)",
+        "ct_msg_heading": "Cut off messages (to copy)",
+        "ct_msg_both": "Left and arrived",
+        "ct_msg_left": "Left only (LEFT PLANT)",
+        "ct_msg_arrived": "Arrived only (ARRIVED AT)",
+        "ct_msg_none": "Enter the READY DATE (and the POD DATE TIME if you have it) to see the messages.",
+        "ct_filename": "File name (optional)",
+        "ct_filename_help": "If you leave it empty, the file is saved with the READY DATE.",
+        "ct_download_name": "It will be saved as: {name}",
+        "ct_carrier": "Carrier",
         "ct_read": "Read BOLs",
         "ct_reading": "Reading {name}...",
         "ct_no_tesseract": (
@@ -201,14 +242,15 @@ TEXT: dict[str, dict[str, str]] = {
             "unreviewed gets imported. Uncheck to also export what was read for doubtful rows."
         ),
         "ct_pending_warn": "Unconfirmed: {doubt} doubtful and {fail} incomplete.",
-        "ct_missing_in_pdf": "BOLs in DATA without a PDF: {items}",
-        "ct_extra_in_pdf": "BOLs in the PDFs that are not in DATA (not included): {items}",
+        "ct_missing_in_pdf": "BOLs in the DIMS without a PDF: {items}",
+        "ct_extra_in_pdf": "BOLs in the PDFs that are not in the DIMS (not included): {items}",
         "ct_no_service_warn": "No service level because the state is missing: {items}",
-        "ct_no_carrier_warn": "No carrier (BEX/VRP) in DATA or in the PDF name: {items}",
-        "ct_download_date": "Download DATE sheet to import",
+        "ct_no_carrier_warn": "No carrier (BEX/VRP), the Shipper Number cannot be set: {items}",
+        "ct_download_date": "Download the DATE sheet only",
         "ct_download_full": "Download full workbook (DATE + DATA)",
         "ct_need_ready": "Enter a valid READY DATE to enable the downloads.",
-        "ct_no_hazmat_note": "Without DATA, HAZMAT (DK) is 0 for every row.",
+        "ct_no_hazmat_note": "Without a DIMS, HAZMAT (DK) is 0 for every row and the DATA sheet is not built.",
+        "ct_files_changed_dims": "The files or the DIMS changed. Press “Read BOLs” to process them again.",
         "ct_memory_error": "Could not save what was learned right now; it will be retried next time.",
         "ct_row_count": "{count} rows in DATE.",
         "r_empty_block": "The Ship To Attention block is empty in the PDF.",
@@ -230,8 +272,10 @@ TEXT: dict[str, dict[str, str]] = {
         "r_state_from_name": "The state was not a code: it was taken from the written name.",
         "r_state_zip_mismatch": "The state does not match the ZIP code.",
         "r_tracking_mismatch": "The header BOL does not match the Tracking No row.",
-        "r_bol_snapped": "The BOL was adjusted to the closest one in DATA.",
-        "r_bol_not_in_data": "This BOL is not in your DATA.",
+        "r_bol_snapped": "The BOL was adjusted to the closest one in the DIMS.",
+        "r_bol_not_in_data": "This BOL is not in the DIMS.",
+        "r_carrier_mismatch": "The carrier differs between the PDF, the DIMS and the file name: check which one it is.",
+        "r_carrier_unknown": "Could not tell whether it is BEX or VRP: choose the carrier to set the Shipper Number.",
         "r_memory_fix:email": "The email was corrected with one confirmed before.",
         "r_memory_fix:domain": "The email domain was corrected with one confirmed before.",
         "r_memory_fix:name": "The name was corrected with the one confirmed for that email.",
@@ -339,6 +383,10 @@ def _confirm(key: str) -> None:
         contact.error = "ct_need_state_bol"
         return
     contact.error = ""
+    chosen = ss.get(f"ct_carrier_{k}", contact.carrier) or ""
+    if chosen in de.SHIPPER_NUMBER:  # lo eligio una persona: ya no hay duda de carrier
+        contact.carrier = chosen
+        contact.reasons = [r for r in contact.reasons if not r.startswith("carrier_")]
     cr.reclassify(contact, get_memory())
     contact.confirmed = True
     ss[f"ct_phone_{k}"] = contact.phone
@@ -400,6 +448,12 @@ def _card(t: Callable[..., str], contact: cr.Contact, ready: str, *, ns: str) ->
             state = st.selectbox(t("ct_state"), options, format_func=_state_label, key=f"ct_state_{key_k}")
             st.session_state.setdefault(f"ct_bol_{key_k}", contact.bol)
             st.text_input(t("ct_bol"), key=f"ct_bol_{key_k}")
+            carriers = ["", *de.SHIPPER_NUMBER]
+            st.session_state.setdefault(f"ct_carrier_{key_k}", contact.carrier if contact.carrier in carriers else "")
+            st.selectbox(
+                t("ct_carrier"), carriers, format_func=lambda c: f"{c} ({de.SHIPPER_NUMBER[c]})" if c else "—",
+                key=f"ct_carrier_{key_k}",
+            )
             st.caption(_service_text(t, state, ready))
             if contact.error:
                 st.error(t(contact.error))
@@ -434,35 +488,75 @@ def _table(t: Callable[..., str], contacts: list[cr.Contact], ready: str) -> pd.
 # ------------------------------------------------------------------- exportar
 
 
-def _shipments(job: dict, data: de.DataSheet | None, only_verified: bool) -> tuple[list[de.ShipmentRow], dict[str, list[str]]]:
+def _shipments(job: dict, dims: de.DimsSheet | None, only_verified: bool) -> tuple[list[de.ShipmentRow], dict[str, list[str]]]:
     by_bol: dict[str, cr.Contact] = {}
     for contact in job["contacts"].values():
         current = by_bol.get(contact.bol)
         if current is None or (contact.confirmed and not current.confirmed):
             by_bol[contact.bol] = contact
-    bols = data.barcodes if data else sorted(by_bol, key=_numeric)
+    bols = dims.barcodes if dims else sorted(by_bol, key=_numeric)
     notes: dict[str, list[str]] = {"missing": [], "extra": [], "no_state": [], "no_carrier": []}
     rows: list[de.ShipmentRow] = []
     for bol in bols:
         contact = by_bol.get(bol)
-        carrier = (data.carriers.get(bol, "") if data else "") or (contact.carrier if contact else "")
+        dims_carrier = dims.carriers.get(bol, "") if dims else ""
+        carrier = (contact.carrier if contact else "") or dims_carrier
         carrier = carrier if carrier in de.SHIPPER_NUMBER else ""
+        hazmat = bool(dims and dims.hazmat.get(bol))
         if contact is None:
             notes["missing"].append(bol)
-            rows.append(de.ShipmentRow(bol=bol, carrier=carrier, hazmat=bool(data and data.hazmat.get(bol))))
+            rows.append(de.ShipmentRow(bol=bol, carrier=carrier, hazmat=hazmat))
             continue
         use = _is_trusted(contact) or not only_verified
         rows.append(de.ShipmentRow(
             bol=bol,
             name=contact.name if use else "", email=contact.email if use else "", phone=contact.phone if use else "",
-            state=contact.state, carrier=carrier, hazmat=bool(data and data.hazmat.get(bol)),
+            state=contact.state, carrier=carrier, hazmat=hazmat,
         ))
         if not sl.normalize_state(contact.state):
             notes["no_state"].append(bol)
-    if data:
+    if dims:
         notes["extra"] = sorted((set(by_bol) - set(bols)), key=_numeric)
     notes["no_carrier"] = [r.bol for r in rows if not r.carrier]
     return rows, notes
+
+
+def _compare_panel(t: Callable[..., str], job: dict, dims: de.DimsSheet) -> None:
+    """Compara los BOL del DIMS con los de los PDF y avisa si el carrier no coincide."""
+    pdf_bols = {c.bol for c in job["contacts"].values() if c.bol}
+    dims_bols = set(dims.barcodes)
+    only_dims = sorted(dims_bols - pdf_bols, key=_numeric)
+    only_pdf = sorted(pdf_bols - dims_bols, key=_numeric)
+    if not only_dims and not only_pdf:
+        st.success(t("ct_cmp_ok", count=len(dims_bols)))
+    else:
+        st.warning(t("ct_cmp_diff", dims=len(dims_bols), pdf=len(pdf_bols)))
+        if only_dims:
+            st.markdown("- " + t("ct_cmp_only_dims", items=", ".join(only_dims)))
+        if only_pdf:
+            st.markdown("- " + t("ct_cmp_only_pdf", items=", ".join(only_pdf)))
+    mismatched = sorted(
+        {c.bol or c.key for c in job["contacts"].values() if "carrier_mismatch" in c.reasons}, key=_numeric
+    )
+    if mismatched:
+        st.warning(t("ct_cmp_carrier", items=", ".join(mismatched)))
+
+
+def _messages_panel(t: Callable[..., str], ready: str) -> dict[str, str]:
+    """POD DATE TIME y los mensajes de cut off que antes salian de DATA!O18:O20."""
+    st.markdown(f"##### {t('ct_msg_heading')}")
+    pod = st.text_input(t("ct_pod"), key="ct_pod", help=t("ct_pod_help"), placeholder="11/19/26 20:54")
+    weekday = st.checkbox(t("ct_weekday"), key="ct_weekday")
+    messages = de.cutoff_messages(ready, pod, weekday)
+    shown = False
+    for key, label in (("both", "ct_msg_both"), ("left", "ct_msg_left"), ("arrived", "ct_msg_arrived")):
+        if messages[key]:
+            shown = True
+            st.caption(t(label))
+            st.code(messages[key], language=None)  # el icono de copiar viene incluido
+    if not shown:
+        st.caption(t("ct_msg_none"))
+    return {"pod": re.sub(r"\s+", " ", pod or "").strip(), **messages}
 
 
 def _on_download(job: dict) -> None:
@@ -481,17 +575,19 @@ def render(t: Callable[..., str]) -> None:
         return
 
     pdf_files = st.file_uploader(t("ct_upload_pdfs"), type=["pdf"], accept_multiple_files=True, key="ct_pdfs")
-    data_file = st.file_uploader(t("ct_upload_data"), type=["xlsx", "xlsm", "xls", "csv"], key="ct_data",
+    dims_file = st.file_uploader(t("ct_upload_data"), type=["xlsx", "xlsm", "xls", "csv"], key="ct_data",
                                  help=t("ct_data_help"))
 
-    data: de.DataSheet | None = None
+    dims: de.DimsSheet | None = None
     data_hash = "nodata"
-    if data_file is not None:
-        content = data_file.getvalue()
+    if dims_file is not None:
+        content = dims_file.getvalue()
         data_hash = hashlib.sha256(content).hexdigest()[:12]
         try:
-            data = de.read_data_sheet(content, data_file.name)
-            st.caption(t("ct_data_ok", boxes=len(data.rows), bols=len(data.barcodes)))
+            dims = de.read_dims(content, dims_file.name)
+            st.caption(t("ct_data_ok", boxes=len(dims.rows), bols=len(dims.barcodes)))
+            if dims.missing:
+                st.caption(t("ct_data_missing_cols", items=", ".join(name.upper() for name in dims.missing)))
         except ValueError as error:
             reason = t("ct_data_header_error") if str(error) == "barcode_header" else str(error)
             st.error(t("ct_data_error", error=reason))
@@ -499,18 +595,21 @@ def render(t: Callable[..., str]) -> None:
             st.error(t("ct_data_error", error=error))
 
     ready_input = st.text_input(
-        t("ct_ready"), value=(data.ready if data else ""), key=f"ct_ready_{data_hash}", help=t("ct_ready_help"),
+        t("ct_ready"), value=(dims.ready if dims else ""), key=f"ct_ready_{data_hash}", help=t("ct_ready_help"),
     )
     ready = de.format_ready(ready_input) if ready_input.strip() else ""
     if ready_input.strip() and not ready:
         st.warning(t("ct_ready_invalid"))
+    extras = _messages_panel(t, ready)
 
     if not pdf_files:
         return
 
     files = [(f.name, f.getvalue()) for f in pdf_files]
-    files_hash = hashlib.sha256(b"".join(hashlib.sha256(c).digest() + n.encode() for n, c in files)).hexdigest()[:16]
-    barcodes = set(data.barcodes) if data else None
+    files_hash = hashlib.sha256(
+        b"".join(hashlib.sha256(c).digest() + n.encode() for n, c in files) + data_hash.encode()
+    ).hexdigest()[:16]
+    barcodes = set(dims.barcodes) if dims else None
 
     if st.button(t("ct_read"), type="primary", width="stretch", key="ct_read_btn"):
         memory = get_memory()
@@ -522,7 +621,7 @@ def render(t: Callable[..., str]) -> None:
 
             pdfs.append(ce.read_pdf(content, name, workers=2, progress=progress))
         bar.empty()
-        contacts = cr.build_contacts(pdfs, memory, barcodes)
+        contacts = cr.build_contacts(pdfs, memory, barcodes, dims.carriers if dims else None)
         contacts.sort(key=lambda c: (_numeric(c.bol), c.source_file))
         st.session_state.ct_job = {
             "hash": files_hash,
@@ -535,13 +634,15 @@ def render(t: Callable[..., str]) -> None:
     if not job:
         return
     if job["hash"] != files_hash:
-        st.info(t("ct_files_changed"))
+        st.info(t("ct_files_changed_dims"))
         return
 
     contacts = sorted(job["contacts"].values(), key=lambda c: (_numeric(c.bol), c.source_file))
     st.success(t("ct_done", contacts=len(contacts), pages=job["pages"]))
     if job["skipped"]:
         st.caption(t("ct_skipped", items="; ".join(f"{n}: {', '.join(map(str, p))}" for n, p in job["skipped"].items())))
+    if dims:
+        _compare_panel(t, job, dims)
     memory = get_memory()
     if memory.last_error:
         st.caption("⚠️ " + t("ct_memory_error"))
@@ -594,7 +695,7 @@ def render(t: Callable[..., str]) -> None:
     if not ready:
         st.info(t("ct_need_ready"))
         return
-    shipments, notes = _shipments(job, data, only_verified)
+    shipments, notes = _shipments(job, dims, only_verified)
     if notes["missing"]:
         st.warning(t("ct_missing_in_pdf", items=", ".join(notes["missing"][:20])))
     if notes["extra"]:
@@ -603,10 +704,10 @@ def render(t: Callable[..., str]) -> None:
         st.warning(t("ct_no_service_warn", items=", ".join(notes["no_state"][:20])))
     if notes["no_carrier"]:
         st.warning(t("ct_no_carrier_warn", items=", ".join(notes["no_carrier"][:20])))
-    if data is None:
+    if dims is None:
         st.caption(t("ct_no_hazmat_note"))
 
-    date_bytes, results = de.build_workbook(shipments, ready, data, include_data=False)
+    date_bytes, results = de.build_workbook(shipments, ready, dims, include_data=False)
     preview = pd.DataFrame([{
         t("ct_col_bol"): r.values["B"], t("ct_col_name"): r.values["AB"], t("ct_col_phone"): r.values["AC"],
         t("ct_col_email"): r.values["DU"], t("ct_col_service"): r.service, t("ct_col_delivery"): r.delivery,
@@ -614,13 +715,19 @@ def render(t: Callable[..., str]) -> None:
     st.caption(t("ct_row_count", count=len(results)))
     st.dataframe(preview, width="stretch", hide_index=True)
 
+    name_input = st.text_input(t("ct_filename"), key="ct_filename", help=t("ct_filename_help"), placeholder=ready)
+    file_name = de.safe_filename(name_input, ready)
+    st.caption(t("ct_download_name", name=file_name))
+    if dims is not None:
+        full_bytes, _ = de.build_workbook(shipments, ready, dims, include_data=True, extras=extras)
+        st.download_button(
+            t("ct_download_full"), data=full_bytes, file_name=file_name, mime=XLSX_MIME,
+            width="stretch", key="ct_dl_full", type="primary", on_click=_on_download, args=(job,),
+        )
+        date_name = de.safe_filename(f"{file_name[:-5]}_DATE", ready)
+    else:
+        date_name = file_name
     st.download_button(
-        t("ct_download_date"), data=date_bytes, file_name="DATE_IMPORT.xlsx", mime=XLSX_MIME,
+        t("ct_download_date"), data=date_bytes, file_name=date_name, mime=XLSX_MIME,
         width="stretch", key="ct_dl_date", on_click=_on_download, args=(job,),
     )
-    if data is not None:
-        full_bytes, _ = de.build_workbook(shipments, ready, data, include_data=True)
-        st.download_button(
-            t("ct_download_full"), data=full_bytes, file_name="BOL_DATE_DATA.xlsx", mime=XLSX_MIME,
-            width="stretch", key="ct_dl_full", on_click=_on_download, args=(job,),
-        )
