@@ -14,6 +14,7 @@ def _app():
     import streamlit as st
 
     import contacts_tab
+    import delivery_ui
     from tests.test_contacts_ui import PDF
 
     class Upload:
@@ -35,7 +36,7 @@ def _app():
         st.session_state.language = "es"
 
     def t(key, **values):
-        text = contacts_tab.TEXT[st.session_state.language][key]
+        text = {**contacts_tab.TEXT[st.session_state.language], **delivery_ui.TEXT[st.session_state.language]}[key]
         return text.format(**values) if values else text
 
     contacts_tab.render(t)
@@ -112,3 +113,46 @@ def test_dims_comparison_carrier_messages_and_file_name(monkeypatch, tmp_path):
     name = next(w for w in at.text_input if w.label.startswith("Nombre del archivo"))
     assert name.placeholder == "11/19/26 1356"  # sin nombre se guarda con el READY DATE
     assert any("11-19-26 1356.xlsx" in c.value for c in at.caption)
+
+
+def _download_buttons(at):
+    return [el for el in at.main if getattr(el, "type", "") == "download_button" or el.type == "download_button"]
+
+
+def test_ready_is_optional_and_delivery_can_be_chosen_for_all(monkeypatch, tmp_path):
+    from datetime import date, time as dtime
+
+    from streamlit.testing.v1 import AppTest
+
+    import contacts_tab
+    import date_export as de
+
+    calls = []
+    original = de.build_workbook
+
+    def spy(shipments, ready, dims=None, **kwargs):
+        calls.append({"ready": ready, "rows": list(shipments), **kwargs})
+        return original(shipments, ready, dims, **kwargs)
+
+    monkeypatch.setattr(de, "build_workbook", spy)
+    monkeypatch.chdir(tmp_path)
+    contacts_tab.get_memory.clear()
+    at = AppTest.from_function(_app, default_timeout=120)
+    at.run()
+    at.button(key="ct_read_btn").click().run()  # sin READY DATE
+    assert not at.exception
+    assert any("Sin READY DATE" in i.value for i in at.info)  # avisa, pero deja continuar
+    assert len(_download_buttons(at)) >= 1
+    assert calls and calls[-1]["ready"] == "" and calls[-1].get("default_date", "") == ""
+
+    # Una sola seleccion de fecha y hora para todos
+    at.date_input(key="ct_deliv_date").set_value(date(2026, 12, 1)).run()
+    at.time_input(key="ct_deliv_time").set_value(dtime(9, 30)).run()
+    assert not at.exception
+    assert calls[-1]["default_date"] == "12/01/26" and calls[-1]["default_time"] == "0930"
+    assert calls[-1]["ready"] == ""
+
+    # Con un READY mal escrito no se exporta en blanco por error
+    next(w for w in at.text_input if w.label.startswith("READY DATE")).set_value("mañana").run()
+    assert any("Corrige el READY DATE" in i.value for i in at.info)
+    assert _download_buttons(at) == []

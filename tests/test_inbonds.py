@@ -86,3 +86,21 @@ def test_scanned_invoice_is_read_and_cropped_with_ocr():
     assert kinds == {"VRP_scan.pdf": "ci"} and (contact.bol, contact.state) == ("3049251", "ON")
     image = Image.open(io.BytesIO(ib.ci_ship_to_capture(scan, 1)))
     assert image.width < 0.6 * 612 * 150 / 72
+
+
+def test_invoice_to_mexico_or_latam_uses_the_delivery_state():
+    mexico = ["CORP SA DE CV", "CALLE 5 No 10", "MONTERREY, NL 66260", "MX"]  # NL no es Newfoundland aqui
+    brazil = ["EMPRESA LTDA", "RUA X 10", "SAO PAULO SP 01310-100", "BR"]
+    panama = ["ACME TEST LLC", "100 MAIN STREET", "Panama City, FL 32401", "US"]
+    contacts, _, errors = ib.read_files([
+        ("VRP_mx.pdf", make_ci_pdf("3049301", mexico)),
+        ("VRP_br.pdf", make_ci_pdf("3049302", brazil)),
+        ("VRP_us.pdf", make_ci_pdf("3049303", panama)),
+    ])
+    assert errors == {}
+    by_bol = {c.bol: c for c in contacts}
+    assert (by_bol["3049301"].state, by_bol["3049301"].status) == ("TX", "ok")
+    assert "destination_mexico" in by_bol["3049301"].reasons
+    assert (by_bol["3049302"].state, by_bol["3049302"].status) == ("FL", "ok")
+    assert "destination_latam" in by_bol["3049302"].reasons
+    assert by_bol["3049303"].state == "FL" and not any(r.startswith("destination_") for r in by_bol["3049303"].reasons)

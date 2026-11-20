@@ -99,6 +99,28 @@ Sin `GITHUB_TOKEN` la memoria usa un archivo local (`.bol_memory/`) que Streamli
 **Pruebas.** `python -m pytest tests` (las que usan OCR se omiten si Tesseract no está instalado; no se incluyen
 documentos reales: los PDF de prueba se generan con datos inventados en `tests/synthetic.py`).
 
+## Cambios V9.1
+
+**México y otros países (como en la pestaña 1).** Si el Ship To de un BOL o de una Commercial Invoice es de México, el
+estado se toma de la dirección de entrega de la pestaña 1 (Laredo, **TX**); si es de Latinoamérica, de Miami (**FL**).
+Puerto Rico, Canadá y EE. UU. no cambian. Se reutiliza la misma función (`apply_destination_rule`) y las mismas
+direcciones, así que si cambian en la pestaña 1 cambian aquí. Una diferencia a propósito: si el Ship To termina en
+`US`, nunca se toma como extranjero (así “Panama City, FL” o “Mexico, MO” siguen siendo EE. UU.). El BOL queda con una
+nota informativa (no se pone en amarillo); solo si las lecturas del OCR no coinciden sobre el país sale el aviso
+`destination_unsure`. El módulo es `destinations.py`.
+
+**READY DATE opcional.** Si se deja vacío, `Pickup Date`, `Pickup Time`, `Pickup Close Time` y la entrega calculada
+quedan en blanco. Un READY DATE mal escrito sí bloquea la descarga (para no exportar en blanco por un error de dedo).
+
+**Fecha y hora de entrega a mano** (`delivery_ui.py`, en las pestañas de contactos e Inbonds). Antes de descargar:
+
+- *Fecha / hora de entrega para todos*: una sola selección que se aplica a todos los BOL.
+- Una tabla editable con **Entrega** (`MM/DD/YY`) y **Hora** (`HHMM`) de cada BOL para cambiar solo algunos. Si se
+  borra una celda, ese campo queda vacío.
+- Prioridad: lo escrito en la fila > lo elegido para todos > el cálculo (service level + READY DATE; hora `1600`).
+
+Sin READY DATE y sin fecha elegida, la columna de entrega (`AF`) queda vacía y la hora (`AG`) sigue en `1600`.
+
 ## Cambios V9
 
 **DIMS en lugar de DATA.** Ya no hace falta pegar nada en la hoja DATA. En la pestaña de contactos se sube el DIMS
