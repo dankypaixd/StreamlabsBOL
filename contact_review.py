@@ -63,7 +63,8 @@ class Contact:
     bol: str
     source_file: str
     pages: list[int]
-    carrier: str = ""
+    carrier: str = ""  # resultado final (confirmado entre las fuentes de abajo)
+    carrier_sources: dict[str, str] = field(default_factory=dict)  # pdf / dims / file -> BEX|VRP
     name: str = ""
     email: str = ""
     phone: str = ""
@@ -91,6 +92,37 @@ def carrier_from_filename(filename: str) -> str:
     return ""
 
 
+def resolve_carrier(pdf: str = "", dims: str = "", file: str = "") -> tuple[str, str]:
+    """Carrier final y motivo de duda ("" si todo coincide).
+
+    Se identifica por el contenido del PDF (Ship From, como la pestana 1) y se confirma con la
+    columna CARRIER del DIMS y con el nombre del archivo. Si no coinciden manda la mayoria y,
+    en empate, lo que dice el propio BOL; en ese caso se marca para revisar.
+    """
+    sources = {"pdf": pdf, "dims": dims, "file": file}
+    found = {k: v for k, v in sources.items() if v in ("BEX", "VRP")}
+    if not found:
+        return "", "carrier_unknown"
+    values = list(found.values())
+    if len(set(values)) == 1:
+        return values[0], ""
+    ranking = sorted(set(values), key=lambda c: (-values.count(c), "pdf" not in found or found["pdf"] != c))
+    return ranking[0], "carrier_mismatch"
+
+
+def set_carrier(contact: "Contact", dims: str = "") -> None:
+    """Calcula contact.carrier con todas las fuentes y deja (o quita) la bandera de duda."""
+    sources = dict(contact.carrier_sources)
+    if dims:
+        sources["dims"] = dims
+    contact.carrier_sources = sources
+    carrier, reason = resolve_carrier(sources.get("pdf", ""), sources.get("dims", ""), sources.get("file", ""))
+    contact.carrier = carrier
+    contact.reasons = [r for r in contact.reasons if not r.startswith("carrier_")]
+    if reason:
+        contact.reasons.append(reason)
+
+
 def _merge(fields: list[FieldRead], normalizer=lambda s: s, prefer=None) -> FieldRead:
     reads: list[tuple[str, float | None]] = []
     weights: list[float] = []
@@ -107,6 +139,11 @@ def _merge_phone(fields: list[FieldRead]) -> FieldRead:
         reads.extend(item.reads)
         weights.extend(item.weights or [1.0] * len(item.reads))
     return vote_phone(reads, weights)
+
+
+def _majority(values: list[str]) -> str:
+    values = [v for v in values if v]
+    return max(set(values), key=values.count) if values else ""
 
 
 def _edit_distance(a: str, b: str) -> int:
@@ -154,7 +191,12 @@ def merge_pages(pdfs: Iterable[PdfRead]) -> list[Contact]:
             bol=bol.value,
             source_file=filename,
             pages=sorted(p.page_no for p in pages),
-            carrier=carrier_from_filename(filename),
+            carrier_sources={
+                k: v for k, v in (
+                    ("pdf", _majority([p.carrier for p in pages])),
+                    ("file", carrier_from_filename(filename)),
+                ) if v
+            },
             name=name.value,
             email=email.value,
             phone=phone.value,
@@ -195,6 +237,7 @@ def merge_pages(pdfs: Iterable[PdfRead]) -> list[Contact]:
                 values = {norm(getattr(p, fname).value) for p in pages if getattr(p, fname).value}
                 if len(values) > 1:
                     contact.reasons.append(f"pages_disagree:{fname}")
+        set_carrier(contact)
         contact.ocr = {**contact.values(), "bol": contact.bol}
         contacts.append(contact)
     return contacts
@@ -281,14 +324,19 @@ def snap_to_data(contact: Contact, barcodes: set[str]) -> None:
 # ---------------------------------------------------------- clasificacion
 
 
-def classify(contact: Contact, memory: Memory | None = None, check_zip: bool = True) -> Contact:
-    """Asigna status y razones. No cambia los valores (eso lo hizo apply_memory)."""
+def classify(
+    contact: Contact, memory: Memory | None = None, check_zip: bool = True, need_contact: bool = True,
+) -> Contact:
+    """Asigna status y razones. No cambia los valores (eso lo hizo apply_memory).
+
+    Con ``need_contact=False`` (pestana Inbonds) no se exige nombre, correo ni telefono.
+    """
     hard: list[str] = []
-    if "empty_block" in contact.reasons:
+    if need_contact and "empty_block" in contact.reasons:
         hard.append("empty_block")
     if not contact.bol or contact.key.startswith("?"):
         hard.append("missing:bol")
-    for fname in ("name", "email", "phone"):
+    for fname in (("name", "email", "phone") if need_contact else ()):
         value = getattr(contact, fname)
         if not value:
             if "empty_block" not in contact.reasons:
@@ -306,14 +354,15 @@ def classify(contact: Contact, memory: Memory | None = None, check_zip: bool = T
             contact.reasons.append("state_zip_mismatch")
 
     if (
-        contact.email
+        need_contact
+        and contact.email
         and _AMBIGUOUS_GLYPH.search(contact.email)
         and not (memory and memory.lookup(contact.email))
         and "ambiguous_glyph" not in contact.reasons
     ):
         contact.reasons.append("ambiguous_glyph")
 
-    if contact.name and re.search(r"[\d/]", contact.name) and "name_odd" not in contact.reasons:
+    if need_contact and contact.name and re.search(r"[\d/]", contact.name) and "name_odd" not in contact.reasons:
         contact.reasons.append("name_odd")  # p. ej. "GLADYS MORASALOMON /4509030732": decide la persona
 
     soft: list[str] = []
@@ -324,11 +373,11 @@ def classify(contact: Contact, memory: Memory | None = None, check_zip: bool = T
         thresholds = (
             ("name", AGREE_NAME), ("email", AGREE_EMAIL), ("phone", AGREE_PHONE),
             ("state", AGREE_STATE), ("bol", AGREE_BOL), ("phone_prefix", SUPPORT_PHONE_PREFIX),
-        )
+        ) if need_contact else (("state", AGREE_STATE), ("bol", AGREE_BOL))
         for fname, limit in thresholds:
             if contact.agreement.get(fname, 0.0) < limit:
                 soft.append(f"lowagree:{fname}")
-    informational = {"bol_not_in_data"}
+    informational = {"bol_not_in_data", "bol_not_in_dims"}
     flags = [r for r in contact.reasons if r not in informational and not r.startswith("memory_exact")]
     if memory_exact:
         # La coincidencia exacta con memoria absorbe dudas del OCR, no las de BOL/estado.
@@ -362,19 +411,27 @@ def build_contacts(
     pdfs: Iterable[PdfRead],
     memory: Memory | None = None,
     data_barcodes: set[str] | None = None,
+    dims_carriers: dict[str, str] | None = None,
+    need_contact: bool = True,
 ) -> list[Contact]:
+    """Une paginas, aplica memoria, compara con el DIMS (BOL y carrier) y clasifica."""
     contacts = merge_pages(pdfs)
     for contact in contacts:
-        apply_memory(contact, memory)
+        if need_contact:
+            apply_memory(contact, memory)
         if data_barcodes:
             snap_to_data(contact, data_barcodes)
-        classify(contact, memory)
+        if dims_carriers is not None:
+            set_carrier(contact, dims_carriers.get(contact.bol, ""))
+        classify(contact, memory, need_contact=need_contact)
     return contacts
 
 
-def reclassify(contact: Contact, memory: Memory | None = None) -> Contact:
+def reclassify(contact: Contact, memory: Memory | None = None, need_contact: bool = True) -> Contact:
     """Vuelve a calcular el estado de una fila editada a mano por el usuario."""
     contact.phone = normalize_phone(contact.phone) if contact.phone else ""
     contact.agreement = {k: 1.0 for k in contact.agreement}  # lo escribio una persona
-    contact.reasons = [r for r in contact.reasons if r.startswith(("memory_fix", "bol_not_in_data"))]
-    return classify(contact, memory, check_zip=False)  # el estado lo reviso una persona
+    contact.reasons = [
+        r for r in contact.reasons if r.startswith(("memory_fix", "bol_not_in_data", "carrier_"))
+    ]
+    return classify(contact, memory, check_zip=False, need_contact=need_contact)  # el estado lo reviso una persona

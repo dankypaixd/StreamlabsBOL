@@ -95,3 +95,30 @@ def test_ambiguous_i_l_glyph_is_never_green_until_known(tmp_path):
 def test_name_with_digits_or_slash_needs_review():
     odd = build([page(1, name="GLADYS MORASALOMON /4509030732")])[0]
     assert odd.status == "doubt" and "name_odd" in odd.reasons
+
+
+def test_carrier_is_confirmed_between_pdf_dims_and_file_name():
+    assert cr.resolve_carrier("BEX", "BEX", "BEX") == ("BEX", "")
+    assert cr.resolve_carrier("", "VRP", "VRP") == ("VRP", "")  # basta con que no se contradigan
+    assert cr.resolve_carrier("BEX", "VRP", "VRP") == ("VRP", "carrier_mismatch")  # manda la mayoria
+    assert cr.resolve_carrier("BEX", "VRP", "") == ("BEX", "carrier_mismatch")  # empate: manda el PDF
+    assert cr.resolve_carrier("", "", "") == ("", "carrier_unknown")
+
+
+def test_pdf_layout_beats_file_name_and_mismatch_is_flagged_yellow():
+    bex_page = page(1, carrier="BEX")  # el BOL dice IEC TECHNOLOGIES, el archivo dice VRP_x.pdf
+    got = build([bex_page])[0]
+    assert got.carrier == "BEX" and "carrier_mismatch" in got.reasons and got.status == "doubt"
+
+    # con el DIMS de acuerdo con el PDF ya no hay duda
+    dims = {"3049901": "BEX"}
+    got = cr.build_contacts([PdfRead("x.pdf", [page(1, carrier="BEX")], 1)], None, None, dims)[0]
+    assert got.carrier == "BEX" and "carrier_mismatch" not in got.reasons and got.status == "ok"
+
+
+def test_inbond_classification_does_not_need_contact_fields():
+    blank = page(1, name="", email="", phone="")
+    for fname in ("name", "email", "phone"):
+        setattr(blank, fname, FieldRead())
+    got = cr.build_contacts([PdfRead("VRP_x.pdf", [blank], 1)], None, None, None, need_contact=False)[0]
+    assert got.status == "ok" and got.state == "FL"

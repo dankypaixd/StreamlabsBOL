@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 import contacts_tab
+import inbonds_tab
 from bol_generator import BolExtractionError, BolRecord, extract_unique_records, generate_bol_pdf
 from dimension_converter import (
     DimensionConversionError,
@@ -33,8 +34,9 @@ st.set_page_config(
 TRANSLATIONS: dict[str, dict[str, str]] = {
     "es": {
         "app_title": "Generador de BOL y convertidor de dimensiones",
-        "app_version": "Versión 8",
+        "app_version": "Versión 9",
         "interface_controls": "Idioma y apariencia",
+        "theme_hint": "El tema (claro u oscuro) sigue el de tu dispositivo. Para cambiarlo: ⋮ arriba a la derecha → Settings → Theme.",
         "switch_language": "🌐 English",
         "switch_dark": "🌙 Modo oscuro",
         "switch_light": "☀️ Modo claro",
@@ -109,8 +111,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "en": {
         "app_title": "BOL generator and dimensions converter",
-        "app_version": "Version 8",
+        "app_version": "Version 9",
         "interface_controls": "Language and appearance",
+        "theme_hint": "The theme (light or dark) follows your device. To change it: ⋮ at the top right → Settings → Theme.",
         "switch_language": "🌐 Español",
         "switch_dark": "🌙 Dark mode",
         "switch_light": "☀️ Light mode",
@@ -188,11 +191,11 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 
 for _lang, _texts in contacts_tab.TEXT.items():
     TRANSLATIONS[_lang].update(_texts)
+for _lang, _texts in inbonds_tab.TEXT.items():
+    TRANSLATIONS[_lang].update(_texts)
 
 if "language" not in st.session_state:
     st.session_state.language = "es"
-if "theme_mode" not in st.session_state:
-    st.session_state.theme_mode = "dark"
 
 
 def t(key: str, **values: Any) -> str:
@@ -200,83 +203,13 @@ def t(key: str, **values: Any) -> str:
     return template.format(**values) if values else template
 
 
-def _apply_theme(mode: str) -> None:
-    if mode == "dark":
-        palette = {
-            "bg": "#0E1117",
-            "surface": "#171C24",
-            "surface2": "#202733",
-            "text": "#FAFAFA",
-            "muted": "#B8C0CC",
-            "border": "rgba(255,255,255,.16)",
-            "input": "#141A22",
-            "shadow": "rgba(0,0,0,.28)",
-        }
-    else:
-        palette = {
-            "bg": "#F7F9FC",
-            "surface": "#FFFFFF",
-            "surface2": "#EEF2F7",
-            "text": "#17202A",
-            "muted": "#5B6470",
-            "border": "rgba(23,32,42,.18)",
-            "input": "#FFFFFF",
-            "shadow": "rgba(23,32,42,.10)",
-        }
-
+def _apply_layout() -> None:
+    """Solo el ancho de la pagina. Los colores los maneja el tema de Streamlit (claro u oscuro)
+    definido en .streamlit/config.toml, asi todos los componentes quedan legibles en ambos."""
     st.markdown(
-        f"""
+        """
         <style>
-        :root {{
-            --background-color: {palette['bg']};
-            --secondary-background-color: {palette['surface']};
-            --text-color: {palette['text']};
-        }}
-        html, body, .stApp, [data-testid="stAppViewContainer"] {{
-            background: {palette['bg']} !important;
-            color: {palette['text']} !important;
-        }}
-        [data-testid="stHeader"], [data-testid="stToolbar"] {{
-            background: {palette['bg']} !important;
-        }}
-        .block-container {{
-            max-width: 1600px;
-            padding-top: 1.1rem;
-            padding-bottom: 2rem;
-        }}
-        h1, h2, h3, h4, h5, h6, p, label, span, div {{
-            color: {palette['text']};
-        }}
-        .stCaption, [data-testid="stCaptionContainer"] p {{
-            color: {palette['muted']} !important;
-        }}
-        div[data-testid="stDataEditor"], div[data-testid="stDataFrame"],
-        div[data-testid="stFileUploader"], div[data-testid="stAlert"] {{
-            border: 1px solid {palette['border']} !important;
-            border-radius: 10px !important;
-            box-shadow: 0 2px 12px {palette['shadow']};
-        }}
-        div[data-baseweb="input"] > div,
-        div[data-baseweb="textarea"] > div,
-        textarea, input {{
-            background: {palette['input']} !important;
-            color: {palette['text']} !important;
-            border-color: {palette['border']} !important;
-        }}
-        div[data-baseweb="tab-list"] {{
-            background: {palette['surface']} !important;
-            border-radius: 10px;
-            padding: .2rem .4rem;
-        }}
-        button[kind="secondary"], button[kind="tertiary"] {{
-            background: {palette['surface']} !important;
-            color: {palette['text']} !important;
-            border-color: {palette['border']} !important;
-        }}
-        [data-testid="stDownloadButton"] button {{
-            border-radius: 8px;
-        }}
-        hr {{ border-color: {palette['border']} !important; }}
+        .block-container { max-width: 1600px; padding-top: 1.1rem; padding-bottom: 2rem; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -285,10 +218,6 @@ def _apply_theme(mode: str) -> None:
 
 def _toggle_language() -> None:
     st.session_state.language = "en" if st.session_state.language == "es" else "es"
-
-
-def _toggle_theme() -> None:
-    st.session_state.theme_mode = "light" if st.session_state.theme_mode == "dark" else "dark"
 
 
 def _numeric_key(value: str) -> tuple[int, int | str, str]:
@@ -439,8 +368,7 @@ def _edited_dimension_rows(edited: pd.DataFrame) -> list[OutputRow]:
     return rows
 
 
-# Apply the selected theme before drawing the visible interface controls.
-_apply_theme(st.session_state.theme_mode)
+_apply_layout()
 
 st.title(t("app_title"))
 version_col, spacer_col = st.columns([1, 7])
@@ -448,7 +376,7 @@ with version_col:
     st.caption(t("app_version"))
 
 st.markdown(f"#### {t('interface_controls')}")
-language_col, theme_col, control_spacer = st.columns([1.6, 1.6, 4.8])
+language_col, control_spacer = st.columns([1.6, 6.4])
 with language_col:
     st.button(
         t("switch_language"),
@@ -457,24 +385,13 @@ with language_col:
         on_click=_toggle_language,
         type="secondary",
     )
-with theme_col:
-    theme_label = (
-        t("switch_light")
-        if st.session_state.theme_mode == "dark"
-        else t("switch_dark")
-    )
-    st.button(
-        theme_label,
-        key="theme_toggle",
-        use_container_width=True,
-        on_click=_toggle_theme,
-        type="secondary",
-    )
+with control_spacer:
+    st.caption(t("theme_hint"))
 
 st.divider()
 
-bol_tab, dimensions_tab, contacts_ui_tab = st.tabs(
-    [t("tab_bol"), t("tab_dimensions"), t("tab_contacts")]
+bol_tab, dimensions_tab, contacts_ui_tab, inbonds_ui_tab = st.tabs(
+    [t("tab_bol"), t("tab_dimensions"), t("tab_contacts"), t("tab_inbonds")]
 )
 
 
@@ -798,3 +715,7 @@ with dimensions_tab:
 
 with contacts_ui_tab:
     contacts_tab.render(t)
+
+
+with inbonds_ui_tab:
+    inbonds_tab.render(t)

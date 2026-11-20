@@ -101,6 +101,7 @@ class PageRead:
     state: FieldRead = field(default_factory=FieldRead)
     zip_code: str = ""
     tracking_value: str = ""  # lo que dice la fila Tracking No (si existe)
+    carrier: str = ""  # "BEX" / "VRP" segun el bloque Ship From del propio BOL ("" si no se vio)
     empty_block: bool = False
     email_near_edge: bool = False
     reasons: list[str] = field(default_factory=list)
@@ -638,6 +639,25 @@ def prefer_name_coherent_email(email: FieldRead, name: str) -> tuple[FieldRead, 
 # ----------------------------------------------------------- lectura de pagina
 
 
+def detect_carrier(words: list[OcrWord], height: float) -> str:
+    """BEX o VRP segun el Ship From impreso en el BOL (misma regla que la pestana 1).
+
+    La pestana 1 trata "IEC TECHNOLOGIES" como BEX y todo lo demas como VRP. Aqui el BOL
+    escaneado dice "IEC TECHNOLOGIES S. DE R.L." (BEX) o "c/o Foxconn" (VRP); si no se ve
+    ninguno de los dos se devuelve "" para no inventar el carrier.
+    """
+    tokens = [re.sub(r"[^a-z0-9]", "", w.text.lower()) for w in words if w.y0 < 0.7 * height]
+    iec = any(tok in ("iec", "lec", "1ec") for tok in tokens)
+    tech = any(_fuzzy(tok, "technologies") >= 0.8 for tok in tokens if len(tok) >= 8)
+    bex = (iec and tech) or any(_fuzzy(tok, "inventec") >= 0.85 for tok in tokens if len(tok) >= 6)
+    vrp = any(_fuzzy(tok, "foxconn") >= 0.8 for tok in tokens if len(tok) >= 6)
+    if bex and not vrp:
+        return "BEX"
+    if vrp and not bex:
+        return "VRP"
+    return ""
+
+
 def render_page(page: fitz.Page, dpi: int = RENDER_DPI) -> Image.Image:
     """Pagina completa: hace falta entera porque algunos escaneos vienen girados."""
     pix = page.get_pixmap(matrix=fitz.Matrix(dpi / 72, dpi / 72), alpha=False)
@@ -796,13 +816,13 @@ def deskew(full: Image.Image, min_angle: float = 0.25) -> tuple[Image.Image, flo
     return full.rotate(angle, resample=Image.BICUBIC, fillcolor=(255, 255, 255)), angle
 
 
-def read_page(full: Image.Image, source_file: str, page_no: int) -> PageRead:
+def read_page(full: Image.Image, source_file: str, page_no: int, contact: bool = True) -> PageRead:
     """Lee una pagina completa (200 dpi). Si no ve las etiquetas, prueba girada 180 grados."""
     for angle in (0, 180):
         page_img = full if angle == 0 else full.rotate(180)
         page_img, skew = deskew(page_img)
         top = page_img.crop((0, 0, page_img.width, int(page_img.height * TOP_FRACTION)))
-        result = _read_top(top, source_file, page_no)
+        result = _read_top(top, source_file, page_no, contact)
         if result.kind == "bol":
             result.rotation = angle
             result.skew = skew
@@ -815,7 +835,7 @@ def read_page(full: Image.Image, source_file: str, page_no: int) -> PageRead:
     return result
 
 
-def _read_top(img: Image.Image, source_file: str, page_no: int) -> PageRead:
+def _read_top(img: Image.Image, source_file: str, page_no: int, contact: bool = True) -> PageRead:
     """Lee la parte superior de una pagina ya orientada."""
     gray_full = img.convert("L")
     small = gray_full.resize(
@@ -828,6 +848,7 @@ def _read_top(img: Image.Image, source_file: str, page_no: int) -> PageRead:
         return result
 
     result.kind = "bol"
+    result.carrier = detect_carrier(words, small.height)
     k = 1 / ANCHOR_SCALE
     a = anchors
     W, _ = gray_full.size
@@ -862,7 +883,9 @@ def _read_top(img: Image.Image, source_file: str, page_no: int) -> PageRead:
     email_box: Box | None = None
     phone_boxes: list[Box] = []
     name_boxes: list[Box] = []
-    if _ink_fraction(att_gray) < 0.0015:
+    if not contact:
+        pass  # Inbonds: solo hace falta BOL, estado y carrier
+    elif _ink_fraction(att_gray) < 0.0015:
         result.empty_block = True
     else:
         name_votes: list[tuple[str, float | None, float]] = []
@@ -1034,6 +1057,7 @@ def read_pdf(
     *,
     workers: int = 2,
     progress: Callable[[int, int], None] | None = None,
+    contact: bool = True,
 ) -> PdfRead:
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     total = len(doc)
@@ -1044,7 +1068,7 @@ def read_pdf(
         for start in range(0, total, chunk):
             # PyMuPDF no es thread-safe: se renderiza en serie y solo el OCR va en hilos.
             batch = [(i + 1, render_page(doc[i])) for i in range(start, min(total, start + chunk))]
-            futures = [pool.submit(read_page, img, filename, no) for no, img in batch]
+            futures = [pool.submit(read_page, img, filename, no, contact) for no, img in batch]
             for future in futures:
                 pages.append(future.result())
                 done += 1

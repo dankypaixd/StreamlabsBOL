@@ -20,12 +20,14 @@ Aplicación Streamlit para:
 - `contact_review.py`: une las páginas de un BOL, aplica lo aprendido y clasifica en verde / amarillo / rojo.
 - `contact_memory.py`: memoria de contactos confirmados (cifrada, guardada en una rama de GitHub).
 - `service_levels.py`: service level por estado y fecha de entrega con cut-off 0800–1700 (sin fines de semana).
-- `date_export.py`: genera las hojas DATE (198 columnas del template) y DATA.
+- `date_export.py`: lee el DIMS (por nombre de columna) y genera las hojas DATE (198 columnas del template) y DATA, los mensajes de cut off y el nombre del archivo.
+- `inbonds_tab.py`: pestaña “Inbonds” (BOL o Commercial Invoice → estado, service level y `INBD` en la columna FK).
 - `assets/SERVICE_LEVELS.csv`: lista estado → días (editable). `assets/DATE_HEADERS.json`: encabezados del template.
 - `packages.txt`: paquetes del sistema para Streamlit Cloud (Tesseract OCR).
 - `assets/BOL_TEMPLATE.pdf`: plantilla de BOL.
 - `assets/DIMENSIONES_TEMPLATE.xlsx`: plantilla de dimensiones.
-- `.streamlit/config.toml`: configuración base y límite de carga.
+- `.streamlit/config.toml`: temas claro y oscuro y límite de carga.
+- `.github/workflows/keepalive.yml` y `.github/keepalive.py`: visita la app cada 6 horas para que Streamlit Cloud no la duerma.
 
 ## Despliegue
 
@@ -63,13 +65,13 @@ campos tal como quedaron escritos, que se pueden editar.
 Un teléfono no tiene formato fijo: se aceptan dígitos y el signo `+`.
 
 **Service level y fecha de entrega.** Salen del estado del Ship To con `assets/SERVICE_LEVELS.csv` (`3D`, `4D`…).
-La fecha se mide desde el READY DATE (`MM/DD/YY HHMM`, celda N2 de DATA): dentro del cut-off 0800–1700 el mismo día
+La fecha se mide desde el READY DATE (`MM/DD/YY HHMM`, que se escribe en la pantalla): dentro del cut-off 0800–1700 el mismo día
 es el día 0; después de las 17:00 el día 0 es el siguiente día hábil; los fines de semana no cuentan. Se escribe `MM/DD/YY`.
 Supuestos que no estaban en la especificación (ajustables en `service_levels.py`): antes de las 08:00 el día 0
 es el mismo día; un READY DATE en fin de semana arranca el lunes; no se descuentan feriados (`HOLIDAYS`).
 
-**Excel de salida.** Con tu DATA subida (o la salida de “Convertir dimensiones”) el libro trae las hojas `DATE` y `DATA`
-(Q y R rellenos por BOL). La hoja `DATE` tiene las 198 columnas del template; se llenan A, B, E, Q, R, S, AB, AC, AF,
+**Excel de salida.** Con el DIMS subido el libro trae las hojas `DATE` y `DATA` (la app arma DATA con el orden del
+template; Q y R rellenos por BOL; el TRACKER, si viene, va en la columna S). La hoja `DATE` tiene las 198 columnas del template; se llenan A, B, E, Q, R, S, AB, AC, AF,
 AG, AK, CO, DJ, DK y DU con los mismos valores que calculan tus fórmulas. También se puede bajar solo `DATE`.
 Por defecto, los dudosos e incompletos sin confirmar salen con nombre, correo y teléfono vacíos (casilla en pantalla).
 
@@ -96,3 +98,41 @@ Sin `GITHUB_TOKEN` la memoria usa un archivo local (`.bol_memory/`) que Streamli
 
 **Pruebas.** `python -m pytest tests` (las que usan OCR se omiten si Tesseract no está instalado; no se incluyen
 documentos reales: los PDF de prueba se generan con datos inventados en `tests/synthetic.py`).
+
+## Cambios V9
+
+**DIMS en lugar de DATA.** Ya no hace falta pegar nada en la hoja DATA. En la pestaña de contactos se sube el DIMS
+que se recibe (`.xlsx`, `.xlsm`, `.xls` o `.csv`). Se lee **por nombre de columna**, así que no importa el orden ni que
+falten `HAZMAT`, `TRACKER` o `RACK` (o que vengan vacías): solo se exige `Barcode`. Con él la app:
+
+- compara los BOL del DIMS con los de los PDF y avisa cuáles faltan de un lado y del otro;
+- confirma el carrier de cada BOL;
+- toma el HAZMAT (`DK`) y arma la hoja DATA.
+
+**Carrier y Shipper Number (`E`).** Se identifica igual que la pestaña 1, por el contenido del PDF: el Ship From
+“IEC TECHNOLOGIES” es BEX (`149570`) y “Foxconn” es VRP (`144463`). Se confirma con la columna `CARRIER` del DIMS y con
+el nombre del archivo; si no coinciden gana la mayoría (en empate, el PDF) y el BOL queda en amarillo con el aviso. Si
+no se puede saber, se elige a mano en la tarjeta.
+
+**Nombre del archivo.** Campo opcional; si se deja vacío el archivo se guarda con el READY DATE (`11-19-26 1356.xlsx`).
+
+**Mensajes de cut off.** Debajo del READY DATE hay un campo `POD DATE TIME` y tres mensajes listos para copiar, los mismos
+que armaba `DATA!O18:O20`: `LEFT PLANT … ARRIVED AT …`, `LEFT PLANT …` y `ARRIVED AT …` (con casilla opcional para
+agregar el día de la semana, p. ej. `SATURDAY`). También salen en la hoja DATA del Excel (N2, N3:N4 y N18:O20).
+
+**Pestaña Inbonds.** Lee BOL escaneados o Commercial Invoice (el mismo lector de la pestaña 1), reconoce el estado del
+Ship To y calcula service level y fecha de entrega. No lee el contacto. En DATE escribe `INBD` en la columna `FK`
+(Priority Code) de cada BOL.
+
+**Temas claro y oscuro.** El tema sigue el del dispositivo (se cambia en ⋮ → Settings → Theme). Se quitó el botón de
+modo claro/oscuro propio y los colores forzados, que dejaban texto blanco sobre fondos claros.
+
+**Que la app no se duerma.** Streamlit Community Cloud duerme las apps sin visitas (unas 12 horas). El workflow
+`keepalive.yml` abre la app con un navegador cada 6 horas y, si estaba dormida, la despierta. Para activarlo:
+
+1. En GitHub: *Settings → Secrets and variables → Actions → Variables → New repository variable*, nombre `APP_URL`,
+   valor la dirección de tu app (`https://....streamlit.app`). Alternativa: poner la dirección en `.github/app_url.txt`.
+2. En la pestaña *Actions* abre “Mantener la app despierta” y pulsa *Run workflow* para probarlo.
+
+Es una ayuda, no una garantía: Streamlit puede cambiar sus reglas, y GitHub pausa los workflows programados si el
+repositorio pasa 60 días sin actividad.
