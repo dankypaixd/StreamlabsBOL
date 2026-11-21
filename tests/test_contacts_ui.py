@@ -131,6 +131,7 @@ def test_ready_is_optional_and_messages_follow_what_is_typed(monkeypatch, tmp_pa
     assert not at.exception
     assert len(_download_buttons(at)) >= 1  # se puede descargar con los campos en blanco
     assert not at.warning or not any("push" in w.value for w in at.warning)
+    assert list(at.code) == []  # sin READY DATE ni POD no se ve ningun mensaje
 
     # POD solo: sale ARRIVED AT con lo que se escribio
     next(w for w in at.text_input if w.label.startswith("POD DATE TIME")).set_value("11/20/26 0800").run()
@@ -150,3 +151,25 @@ def test_ready_is_optional_and_messages_follow_what_is_typed(monkeypatch, tmp_pa
     ready.set_value("mañana").run()
     assert any("Corrige el READY DATE" in i.value for i in at.info)
     assert _download_buttons(at) == []
+
+
+def test_tables_show_ready_date_and_time_instead_of_delivery():
+    import contact_review as cr
+    import contacts_tab
+    import inbonds_tab
+
+    def t(key, **values):
+        text = contacts_tab.TEXT["es"][key]
+        return text.format(**values) if values else text
+
+    assert contacts_tab.ready_parts("11/19/26 1356") == ("11/19/26", "1356")
+    assert contacts_tab.ready_parts("") == ("", "")
+    contact = cr.Contact(key="1", bol="3049901", source_file="x.pdf", pages=[1], carrier="VRP", state="TX")
+    for table in (contacts_tab._table(t, [contact], "11/19/26 1356"), inbonds_tab._table(t, [contact], "11/19/26 1356")):
+        assert list(table.columns)[-2:] == ["Fecha ready", "Hora ready"]
+        assert table.iloc[0]["Fecha ready"] == "11/19/26" and table.iloc[0]["Hora ready"] == "1356"
+        assert "Entrega" not in table.columns
+    # sin READY DATE esas columnas no aparecen
+    assert "Fecha ready" not in contacts_tab._table(t, [contact], "").columns
+    assert contacts_tab._service_text(t, "TX", "11/19/26 1356") == "Service level: 3D · READY DATE: 11/19/26 · 1356"
+    assert contacts_tab._service_text(t, "TX", "") == "Service level: 3D"

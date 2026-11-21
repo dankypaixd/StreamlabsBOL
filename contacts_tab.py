@@ -21,10 +21,10 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 TEXT: dict[str, dict[str, str]] = {
     "es": {
         "tab_contacts": "Leer contactos de BOL",
-        "ct_heading": "Contacto, service level y fecha de entrega desde el BOL",
+        "ct_heading": "Contacto y service level desde el BOL",
         "ct_intro": (
             "Lee el bloque “Ship To Attention” (nombre, correo y teléfono) y el estado del Ship To de cada "
-            "Bill of Lading, calcula el service level y la fecha de entrega, y prepara el Excel para importar."
+            "Bill of Lading, calcula el service level y prepara el Excel para importar."
         ),
         "ct_upload_pdfs": "Sube los PDF de los BOL (puedes subir varios)",
         "ct_upload_data": "Sube los DIMS (.xlsx, .xlsm o .csv)",
@@ -53,13 +53,9 @@ TEXT: dict[str, dict[str, str]] = {
             "la entrega se está corriendo (push) un día."
         ),
         "ct_pod": "POD DATE TIME (opcional)",
-        "ct_pod_help": "Ejemplo: 11/20/26 0800. Se usa para el mensaje ARRIVED AT.",
-        "ct_weekday": "Incluir el día de la semana (ej. SATURDAY 11/07/26 10:44)",
-        "ct_msg_heading": "Mensajes de cut off (para copiar)",
-        "ct_msg_both": "Salida y llegada",
-        "ct_msg_left": "Solo salida (LEFT PLANT)",
-        "ct_msg_arrived": "Solo llegada (ARRIVED AT)",
-        "ct_msg_none": "Escribe el READY DATE (y el POD DATE TIME si lo tienes) para ver los mensajes.",
+        "ct_pod_help": "Ejemplo: 11/20/26 0800. Solo sirve para armar el mensaje ARRIVED AT que copias; no va al Excel de importar.",
+        "ct_weekday": "Con día de la semana",
+        "ct_weekday_help": "Agrega el día al mensaje, ej. SATURDAY 11/07/26 10:44.",
         "ct_filename": "Nombre del archivo (opcional)",
         "ct_filename_help": "Si lo dejas vacío, el archivo se guarda con el READY DATE.",
         "ct_download_name": "Se guardará como: {name}",
@@ -91,7 +87,8 @@ TEXT: dict[str, dict[str, str]] = {
         "ct_bol": "BOL",
         "ct_read_by_ocr": "Lo que leyó: {name} · {email} · {phone} · {state}",
         "ct_before_memory": "Antes de aplicar lo conocido decía: {items}",
-        "ct_service": "Service level: {service} · Entrega: {delivery}",
+        "ct_service": "Service level: {service}",
+        "ct_service_ready": "Service level: {service} · READY DATE: {date} · {time}",
         "ct_service_none": "Elige el estado para calcular el service level.",
         "ct_confirm": "Confirmar",
         "ct_undo": "Deshacer",
@@ -106,7 +103,8 @@ TEXT: dict[str, dict[str, str]] = {
         "ct_col_phone": "Teléfono",
         "ct_col_state": "Estado",
         "ct_col_service": "Service",
-        "ct_col_delivery": "Entrega",
+        "ct_col_ready_date": "Fecha ready",
+        "ct_col_ready_time": "Hora ready",
         "ct_col_status": "Estado de lectura",
         "ct_export_heading": "Excel para importar",
         "ct_only_verified": "Solo incluir nombre, correo y teléfono de los verdes y confirmados",
@@ -165,10 +163,10 @@ TEXT: dict[str, dict[str, str]] = {
     },
     "en": {
         "tab_contacts": "Read BOL contacts",
-        "ct_heading": "Contact, service level and delivery date from the BOL",
+        "ct_heading": "Contact and service level from the BOL",
         "ct_intro": (
             "Reads the “Ship To Attention” block (name, email and phone) and the Ship To state of each "
-            "Bill of Lading, calculates the service level and delivery date, and prepares the import Excel."
+            "Bill of Lading, calculates the service level and prepares the import Excel."
         ),
         "ct_upload_pdfs": "Upload the BOL PDFs (you can upload several)",
         "ct_upload_data": "Upload the DIMS (.xlsx, .xlsm or .csv)",
@@ -197,13 +195,9 @@ TEXT: dict[str, dict[str, str]] = {
             "the delivery is being pushed one day."
         ),
         "ct_pod": "POD DATE TIME (optional)",
-        "ct_pod_help": "Example: 11/20/26 0800. Used for the ARRIVED AT message.",
-        "ct_weekday": "Include the day of the week (e.g. SATURDAY 11/07/26 10:44)",
-        "ct_msg_heading": "Cut off messages (to copy)",
-        "ct_msg_both": "Left and arrived",
-        "ct_msg_left": "Left only (LEFT PLANT)",
-        "ct_msg_arrived": "Arrived only (ARRIVED AT)",
-        "ct_msg_none": "Enter the READY DATE (and the POD DATE TIME if you have it) to see the messages.",
+        "ct_pod_help": "Example: 11/20/26 0800. Only used to build the ARRIVED AT message you copy; it does not go to the import Excel.",
+        "ct_weekday": "With weekday",
+        "ct_weekday_help": "Adds the day to the message, e.g. SATURDAY 11/07/26 10:44.",
         "ct_filename": "File name (optional)",
         "ct_filename_help": "If you leave it empty, the file is saved with the READY DATE.",
         "ct_download_name": "It will be saved as: {name}",
@@ -235,7 +229,8 @@ TEXT: dict[str, dict[str, str]] = {
         "ct_bol": "BOL",
         "ct_read_by_ocr": "OCR read: {name} · {email} · {phone} · {state}",
         "ct_before_memory": "Before applying known data it said: {items}",
-        "ct_service": "Service level: {service} · Delivery: {delivery}",
+        "ct_service": "Service level: {service}",
+        "ct_service_ready": "Service level: {service} · READY DATE: {date} · {time}",
         "ct_service_none": "Pick the state to calculate the service level.",
         "ct_confirm": "Confirm",
         "ct_undo": "Undo",
@@ -250,7 +245,8 @@ TEXT: dict[str, dict[str, str]] = {
         "ct_col_phone": "Phone",
         "ct_col_state": "State",
         "ct_col_service": "Service",
-        "ct_col_delivery": "Delivery",
+        "ct_col_ready_date": "Ready date",
+        "ct_col_ready_time": "Ready time",
         "ct_col_status": "Read status",
         "ct_export_heading": "Excel to import",
         "ct_only_verified": "Only include name, email and phone for green and confirmed rows",
@@ -354,12 +350,26 @@ def _state_label(code: str) -> str:
     return f"{code} ({days}D)" if days is not None else code
 
 
+def ready_parts(ready: str) -> tuple[str, str]:
+    """'11/19/26 1356' -> ('11/19/26', '1356'); ('', '') si no hay READY DATE."""
+    parts = (ready or "").split()
+    return (parts[0], parts[1]) if len(parts) == 2 else ("", "")
+
+
+def ready_columns(t: Callable[..., str], ready: str) -> dict[str, str]:
+    """Las dos columnas de las tablas con la fecha y la hora del READY DATE (ninguna si no hay READY DATE)."""
+    date, hour = ready_parts(ready)
+    return {t("ct_col_ready_date"): date, t("ct_col_ready_time"): hour} if date else {}
+
+
 def _service_text(t: Callable[..., str], state: str, ready: str) -> str:
     service = sl.service_label(state)
     if not service:
         return t("ct_service_none")
-    delivery = sl.delivery_text(ready, state) if ready else "—"
-    return t("ct_service", service=service, delivery=delivery or "—")
+    date, hour = ready_parts(ready)
+    if date:
+        return t("ct_service_ready", service=service, date=date, time=hour)
+    return t("ct_service", service=service)
 
 
 def _current_status(contact: cr.Contact) -> str:
@@ -500,7 +510,7 @@ def _table(t: Callable[..., str], contacts: list[cr.Contact], ready: str) -> pd.
             t("ct_col_bol"): c.bol, t("ct_col_name"): c.name, t("ct_col_email"): c.email,
             t("ct_col_phone"): c.phone, t("ct_col_state"): c.state,
             t("ct_col_service"): sl.service_label(c.state),
-            t("ct_col_delivery"): sl.delivery_text(ready, c.state) if ready and c.state else "",
+            **ready_columns(t, ready),
         })
     return pd.DataFrame(rows)
 
@@ -568,21 +578,30 @@ def push_warning(t: Callable[..., str], ready: str) -> None:
         st.warning(t("ct_push_warn", time=f"{sl.parse_ready(ready):%H:%M}"))
 
 
-def _messages_panel(t: Callable[..., str], ready: str, prefix: str = "ct") -> dict[str, str]:
-    """POD DATE TIME y los mensajes de cut off que antes salian de DATA!O18:O20 (la misma en Inbonds)."""
-    st.markdown(f"##### {t('ct_msg_heading')}")
-    pod = st.text_input(t("ct_pod"), key=f"{prefix}_pod", help=t("ct_pod_help"), placeholder="11/20/26 0800")
-    weekday = st.checkbox(t("ct_weekday"), key=f"{prefix}_weekday")
-    messages = de.cutoff_messages(ready, pod, weekday)
-    shown = False
-    for key, label in (("both", "ct_msg_both"), ("left", "ct_msg_left"), ("arrived", "ct_msg_arrived")):
-        if messages[key]:
-            shown = True
-            st.caption(t(label))
-            st.code(messages[key], language=None)  # el icono de copiar viene incluido
-    if not shown:
-        st.caption(t("ct_msg_none"))
-    return {"pod": re.sub(r"\s+", " ", pod or "").strip(), **messages}
+def ready_block(
+    t: Callable[..., str], container, *, prefix: str, ready_key: str, default: str = "",
+) -> tuple[str, bool, dict[str, str]]:
+    """Arriba de la pestana: READY DATE y POD DATE TIME en una fila y, debajo, los mensajes para copiar.
+
+    Los mensajes cambian con lo que se escribe. Sin READY DATE (y sin POD) no se ve ninguno. El POD solo sirve
+    para armar el mensaje ARRIVED AT. Devuelve (READY normalizado, si esta mal escrito, extras para el Excel).
+    """
+    with container:
+        c_ready, c_pod, c_day = st.columns([3, 3, 2])
+        ready_input = c_ready.text_input(t("ct_ready"), value=default, key=ready_key, help=t("ct_ready_help"))
+        pod = c_pod.text_input(t("ct_pod"), key=f"{prefix}_pod", help=t("ct_pod_help"), placeholder="11/20/26 0800")
+        weekday = c_day.checkbox(t("ct_weekday"), key=f"{prefix}_weekday", help=t("ct_weekday_help"))
+        ready = de.format_ready(ready_input) if ready_input.strip() else ""
+        invalid = bool(ready_input.strip()) and not ready
+        if invalid:
+            st.warning(t("ct_ready_invalid"))
+        push_warning(t, ready)
+        messages = de.cutoff_messages(ready, pod, weekday)
+        shown = [messages[key] for key in ("both", "left", "arrived") if messages[key]]
+        if shown:  # uno al lado del otro para que ocupen poco; el icono de copiar viene incluido en cada uno
+            for column, text in zip(st.columns(len(shown)), shown):
+                column.code(text, language=None, wrap_lines=True)
+    return ready, invalid, {"pod": re.sub(r"\s+", " ", pod or "").strip(), **messages}
 
 
 def _on_download(job: dict) -> None:
@@ -600,6 +619,7 @@ def render(t: Callable[..., str]) -> None:
         st.error(t("ct_no_tesseract"))
         return
 
+    top = st.container()  # READY DATE, POD y mensajes: se llena mas abajo, cuando ya se leyo el DIMS
     pdf_files = st.file_uploader(t("ct_upload_pdfs"), type=["pdf"], accept_multiple_files=True, key="ct_pdfs")
     dims_file = st.file_uploader(t("ct_upload_data"), type=["xlsx", "xlsm", "xls", "csv"], key="ct_data",
                                  help=t("ct_data_help"))
@@ -620,15 +640,9 @@ def render(t: Callable[..., str]) -> None:
         except Exception as error:  # archivo ilegible
             st.error(t("ct_data_error", error=error))
 
-    ready_input = st.text_input(
-        t("ct_ready"), value=(dims.ready if dims else ""), key=f"ct_ready_{data_hash}", help=t("ct_ready_help"),
+    ready, ready_invalid, extras = ready_block(
+        t, top, prefix="ct", ready_key=f"ct_ready_{data_hash}", default=(dims.ready if dims else ""),
     )
-    ready = de.format_ready(ready_input) if ready_input.strip() else ""
-    ready_invalid = bool(ready_input.strip()) and not ready
-    if ready_invalid:
-        st.warning(t("ct_ready_invalid"))
-    push_warning(t, ready)
-    extras = _messages_panel(t, ready)
 
     if not pdf_files:
         return
@@ -738,8 +752,8 @@ def render(t: Callable[..., str]) -> None:
     date_bytes, results = de.build_workbook(shipments, ready, dims, include_data=False)
     preview = pd.DataFrame([{
         t("ct_col_bol"): r.values["B"], t("ct_col_name"): r.values["AB"], t("ct_col_phone"): r.values["AC"],
-        t("ct_col_email"): r.values["DU"], t("ct_col_service"): r.service, t("ct_col_delivery"): r.delivery,
-        "Consignee No.": r.values["T"],
+        t("ct_col_email"): r.values["DU"], t("ct_col_service"): r.service,
+        **ready_columns(t, ready), "Consignee No.": r.values["T"],
     } for r in results])
     st.caption(t("ct_row_count", count=len(results)))
     st.dataframe(preview, width="stretch", hide_index=True)

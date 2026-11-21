@@ -8,7 +8,7 @@ Aplicación Streamlit para:
 4. Leer archivos de dimensiones VRP/BEX, distribuir cajas y pesos por pallet y exportar la plantilla final.
 5. Editar cualquier celda de la tabla de dimensiones, seleccionar o desmarcar filas y exportar solo las elegidas.
 6. **Leer contactos de BOL (V8):** leer el bloque “Ship To Attention” (nombre, correo, teléfono) y el estado del
-   Ship To de cada Bill of Lading, calcular el service level y la fecha de entrega, y exportar el Excel de importación.
+   Ship To de cada Bill of Lading, calcular el service level y exportar el Excel de importación.
 
 ## Archivos principales
 
@@ -64,11 +64,12 @@ campos tal como quedaron escritos, que se pueden editar.
 
 Un teléfono no tiene formato fijo: se aceptan dígitos y el signo `+`.
 
-**Service level y fecha de entrega.** Salen del estado del Ship To con `assets/SERVICE_LEVELS.csv` (`3D`, `4D`…).
-La fecha de entrega se mide desde el READY DATE (`MM/DD/YY HHMM`, que se escribe en la pantalla) y **solo se muestra en pantalla**, para copiarla: no se escribe en ningún Excel: dentro del cut-off 0800–1700 el mismo día
-es el día 0; después de las 17:00 el día 0 es el siguiente día hábil; los fines de semana no cuentan.
-Supuestos que no estaban en la especificación (ajustables en `service_levels.py`): antes de las 08:00 el día 0
-es el mismo día; un READY DATE en fin de semana arranca el lunes; no se descuentan feriados (`HOLIDAYS`).
+**Service level.** Sale del estado del Ship To con `assets/SERVICE_LEVELS.csv` (`3D`, `4D`…). El READY DATE
+(`MM/DD/YY HHMM`, que se escribe en la pantalla) va al Excel como Pickup Date / Time / Close Time. La fecha de entrega
+(READY DATE + service level, cut-off 0800–1700) ya no se muestra ni se escribe en ningún Excel; `service_levels.py` la
+sigue calculando. Supuestos que no estaban en la especificación (ajustables ahí): después de las 17:00 el día 0 es el
+siguiente día hábil; antes de las 08:00 el día 0 es el mismo día; un READY DATE en fin de semana arranca el lunes; no se
+descuentan feriados (`HOLIDAYS`).
 
 **Excel de salida.** Con el DIMS subido el libro trae las hojas `DATE` y `DATA` (la app arma DATA con el orden del
 template; Q (service level) relleno por BOL; el TRACKER, si viene, va en la columna S). La hoja `DATE` tiene las 198 columnas del
@@ -111,8 +112,8 @@ direcciones, así que si cambian en la pestaña 1 cambian aquí. Una diferencia 
 nota informativa (no se pone en amarillo); solo si las lecturas del OCR no coinciden sobre el país sale el aviso
 `destination_unsure`. El módulo es `destinations.py`.
 
-**READY DATE opcional.** Si se deja vacío, `Pickup Date`, `Pickup Time` y `Pickup Close Time` quedan en blanco (y la
-entrega en pantalla también). Un READY DATE mal escrito sí bloquea la descarga, para no exportar en blanco por un error de dedo.
+**READY DATE opcional.** Si se deja vacío, `Pickup Date`, `Pickup Time` y `Pickup Close Time` quedan en blanco (y las columnas
+de fecha y hora ready de las tablas se ocultan). Un READY DATE mal escrito sí bloquea la descarga, para no exportar en blanco por un error de dedo.
 
 **Consignee Number (`T` en DATE).** Si el Ship To es la dirección de Laredo (11905 Conly Road, Laredo TX 78045) se
 escribe `147229`; si es la de Miami (12430 NW 25th Street, Miami FL 33182) se escribe `210475`. Cuenta tanto cuando la
@@ -120,11 +121,13 @@ dirección se convierte (país México → Laredo, Latinoamérica → Miami) com
 Commercial Invoice. En cualquier otra dirección queda vacío. Aplica a las pestañas de contactos e Inbonds y se ve en la
 vista previa (`Consignee No.`). El módulo es `destinations.py`.
 
-**Mensajes de cut off y aviso de push (pestañas de contactos e Inbonds).** Debajo del READY DATE hay un campo
-`POD DATE TIME` donde se escribe, por ejemplo, `11/20/26 0800`. Con eso la app arma los mensajes que antes salían de la
-hoja DATA, listos para copiar: `ARRIVED AT 11/20/26 0800` (del POD), `LEFT PLANT 11/20/26 1456` (del READY DATE) y los
-dos juntos. Si el READY DATE es después de las 17:00 (fuera del cut-off 0800–1700) sale un aviso de que la entrega se
-está corriendo (push) un día. No cambia nada del Excel.
+**Arriba de cada pestaña (contactos e Inbonds): READY DATE, POD y mensajes para copiar.** READY DATE y `POD DATE TIME`
+van en una fila al inicio. Con ellos la app arma, uno al lado del otro y listos para copiar con su icono:
+`LEFT PLANT 11/20/26 1456 ARRIVED AT 11/20/26 0800`, `LEFT PLANT 11/20/26 1456` y `ARRIVED AT 11/20/26 0800`. Cambian con
+lo que se escribe; sin READY DATE (ni POD) no se ve ninguno. El POD solo sirve para armar el mensaje ARRIVED AT. Si el
+READY DATE es después de las 17:00 (fuera del cut-off 0800–1700) sale un aviso de que la entrega se está corriendo (push)
+un día. En todas las tablas y tarjetas (la fecha de entrega ya no se muestra) salen las columnas **Fecha ready** y **Hora
+ready** del READY DATE.
 
 ## Cambios V9
 
@@ -148,7 +151,7 @@ que armaba `DATA!O18:O20`: `LEFT PLANT … ARRIVED AT …`, `LEFT PLANT …` y `
 agregar el día de la semana, p. ej. `SATURDAY`). También salen en la hoja DATA del Excel (N2, N3:N4 y N18:O20).
 
 **Pestaña Inbonds.** Lee BOL escaneados o Commercial Invoice (el mismo lector de la pestaña 1), reconoce el estado del
-Ship To y calcula service level y fecha de entrega. No lee el contacto. En DATE escribe `INBD` en la columna `FK`
+Ship To y calcula el service level. No lee el contacto. En DATE escribe `INBD` en la columna `FK`
 (Priority Code) de cada BOL.
 
 **Temas claro y oscuro.** El tema sigue el del dispositivo (se cambia en ⋮ → Settings → Theme). Se quitó el botón de

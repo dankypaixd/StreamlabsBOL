@@ -33,8 +33,8 @@ TEXT: dict[str, dict[str, str]] = {
         "tab_inbonds": "Inbonds",
         "ib_heading": "Inbonds: estado y service level desde el BOL o la Commercial Invoice",
         "ib_intro": (
-            "Lee el BOL o la Commercial Invoice, reconoce el estado del Ship To y calcula el service level y la "
-            "fecha de entrega. No lee el contacto. En DATE pone INBD en la columna FK (Priority Code)."
+            "Lee el BOL o la Commercial Invoice, reconoce el estado del Ship To y calcula el service level. "
+            "No lee el contacto. En DATE pone INBD en la columna FK (Priority Code)."
         ),
         "ib_upload": "Sube los PDF (BOL o Commercial Invoice, puedes subir varios)",
         "ib_read": "Leer PDF",
@@ -61,7 +61,7 @@ TEXT: dict[str, dict[str, str]] = {
         "ib_heading": "Inbonds: state and service level from the BOL or the Commercial Invoice",
         "ib_intro": (
             "Reads the BOL or the Commercial Invoice, recognizes the Ship To state and calculates the service "
-            "level and delivery date. It does not read the contact. In DATE it puts INBD in column FK (Priority Code)."
+            "level. It does not read the contact. In DATE it puts INBD in column FK (Priority Code)."
         ),
         "ib_upload": "Upload the PDFs (BOL or Commercial Invoice, you can upload several)",
         "ib_read": "Read PDFs",
@@ -345,7 +345,7 @@ def _table(t: Callable[..., str], contacts: list[cr.Contact], ready: str) -> pd.
     return pd.DataFrame([{
         t("ct_col_bol"): c.bol, t("ct_col_state"): c.state, "Carrier": c.carrier,
         t("ct_col_service"): sl.service_label(c.state),
-        t("ct_col_delivery"): sl.delivery_text(ready, c.state) if ready and c.state else "",
+        **ct.ready_columns(t, ready),
     } for c in contacts])
 
 
@@ -364,14 +364,9 @@ def render(t: Callable[..., str]) -> None:
         st.error(t("ct_no_tesseract"))
         return
 
+    top = st.container()  # READY DATE, POD y mensajes arriba de todo
     pdf_files = st.file_uploader(t("ib_upload"), type=["pdf"], accept_multiple_files=True, key="ib_pdfs")
-    ready_input = st.text_input(t("ct_ready"), key="ib_ready", help=t("ct_ready_help"))
-    ready = de.format_ready(ready_input) if ready_input.strip() else ""
-    ready_invalid = bool(ready_input.strip()) and not ready
-    if ready_invalid:
-        st.warning(t("ct_ready_invalid"))
-    ct.push_warning(t, ready)
-    ct._messages_panel(t, ready, prefix="ib")
+    ready, ready_invalid, _ = ct.ready_block(t, top, prefix="ib", ready_key="ib_ready")
     if not pdf_files:
         return
 
@@ -467,7 +462,8 @@ def render(t: Callable[..., str]) -> None:
     st.caption(t("ib_priority_note") + " " + t("ct_row_count", count=len(results)))
     st.dataframe(pd.DataFrame([{
         t("ct_col_bol"): r.values["B"], "Carrier": next((s.carrier for s in shipments if s.bol == r.bol), ""),
-        t("ct_col_service"): r.service, t("ct_col_delivery"): r.delivery, "Consignee No.": r.values["T"],
+        t("ct_col_service"): r.service,
+        **ct.ready_columns(t, ready), "Consignee No.": r.values["T"],
         "FK": r.values["FK"],
     } for r in results]), width="stretch", hide_index=True)
 
