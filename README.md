@@ -65,14 +65,16 @@ campos tal como quedaron escritos, que se pueden editar.
 Un teléfono no tiene formato fijo: se aceptan dígitos y el signo `+`.
 
 **Service level y fecha de entrega.** Salen del estado del Ship To con `assets/SERVICE_LEVELS.csv` (`3D`, `4D`…).
-La fecha se mide desde el READY DATE (`MM/DD/YY HHMM`, que se escribe en la pantalla): dentro del cut-off 0800–1700 el mismo día
-es el día 0; después de las 17:00 el día 0 es el siguiente día hábil; los fines de semana no cuentan. Se escribe `MM/DD/YY`.
+La fecha de entrega se mide desde el READY DATE (`MM/DD/YY HHMM`, que se escribe en la pantalla) y **solo se muestra en pantalla**, para copiarla: no se escribe en ningún Excel: dentro del cut-off 0800–1700 el mismo día
+es el día 0; después de las 17:00 el día 0 es el siguiente día hábil; los fines de semana no cuentan.
 Supuestos que no estaban en la especificación (ajustables en `service_levels.py`): antes de las 08:00 el día 0
 es el mismo día; un READY DATE en fin de semana arranca el lunes; no se descuentan feriados (`HOLIDAYS`).
 
 **Excel de salida.** Con el DIMS subido el libro trae las hojas `DATE` y `DATA` (la app arma DATA con el orden del
-template; Q y R rellenos por BOL; el TRACKER, si viene, va en la columna S). La hoja `DATE` tiene las 198 columnas del template; se llenan A, B, E, Q, R, S, AB, AC, AF,
-AG, AK, CO, DJ, DK y DU con los mismos valores que calculan tus fórmulas. También se puede bajar solo `DATE`.
+template; Q (service level) relleno por BOL; el TRACKER, si viene, va en la columna S). La hoja `DATE` tiene las 198 columnas del
+template; se llenan A, B, E, Q, R, S (READY DATE: Pickup Date, Time y Close Time), T (Consignee Number), AB, AC, AK, CO, DJ, DK y DU
+con los mismos valores que calculan tus fórmulas. **La fecha y hora de entrega (AF y AG en DATE, DELIVERY DATE en DATA) quedan
+vacías en todos los Excel**; los encabezados se conservan para no mover columnas. También se puede bajar solo `DATE`.
 Por defecto, los dudosos e incompletos sin confirmar salen con nombre, correo y teléfono vacíos (casilla en pantalla).
 
 **Memoria.** Lo confirmado (y los verdes al descargar) se aprende en segundo plano: correo → nombre y teléfonos,
@@ -109,8 +111,8 @@ direcciones, así que si cambian en la pestaña 1 cambian aquí. Una diferencia 
 nota informativa (no se pone en amarillo); solo si las lecturas del OCR no coinciden sobre el país sale el aviso
 `destination_unsure`. El módulo es `destinations.py`.
 
-**READY DATE opcional.** Si se deja vacío, `Pickup Date`, `Pickup Time`, `Pickup Close Time` y la entrega calculada
-quedan en blanco. Un READY DATE mal escrito sí bloquea la descarga (para no exportar en blanco por un error de dedo).
+**READY DATE opcional.** Si se deja vacío, `Pickup Date`, `Pickup Time` y `Pickup Close Time` quedan en blanco (y la
+entrega en pantalla también). Un READY DATE mal escrito sí bloquea la descarga, para no exportar en blanco por un error de dedo.
 
 **Consignee Number (`T` en DATE).** Si el Ship To es la dirección de Laredo (11905 Conly Road, Laredo TX 78045) se
 escribe `147229`; si es la de Miami (12430 NW 25th Street, Miami FL 33182) se escribe `210475`. Cuenta tanto cuando la
@@ -122,7 +124,7 @@ vista previa (`Consignee No.`). El módulo es `destinations.py`.
 `POD DATE TIME` donde se escribe, por ejemplo, `11/20/26 0800`. Con eso la app arma los mensajes que antes salían de la
 hoja DATA, listos para copiar: `ARRIVED AT 11/20/26 0800` (del POD), `LEFT PLANT 11/20/26 1456` (del READY DATE) y los
 dos juntos. Si el READY DATE es después de las 17:00 (fuera del cut-off 0800–1700) sale un aviso de que la entrega se
-está corriendo (push) un día. No cambia nada del Excel: la fecha y hora de entrega siguen saliendo del cálculo.
+está corriendo (push) un día. No cambia nada del Excel.
 
 ## Cambios V9
 

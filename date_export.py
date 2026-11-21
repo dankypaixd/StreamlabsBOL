@@ -14,8 +14,6 @@ Columnas de DATE que se llenan (el resto queda vacio, como en el template):
                                en cualquier otra direccion queda vacio
     AB Consignee Contact       nombre            <- Ship To Attention
     AC Consignee Phone         telefono          <- Ship To Attention
-    AF Scheduled Delivery Date fecha de entrega (MM/DD/YY, segun service level y cut-off)
-    AG Scheduled Delivery Time "1600"
     AK Service                 "3D", "4D"...     (segun el estado del Ship To)
     CO Product Code            "HPDOM"
     DJ BilltoRefType           "RAX"
@@ -23,9 +21,12 @@ Columnas de DATE que se llenan (el resto queda vacio, como en el template):
     DU Consignee Email         correo            <- Ship To Attention
     FK Priority Code           "INBD" (solo pestana Inbonds)
 
+La fecha y hora de entrega (Scheduled Delivery Date / Time, AF y AG de DATE, y DELIVERY DATE de DATA) NO se escriben en
+ningun Excel: no se usan para importar. La entrega solo se calcula para mostrarla en pantalla (DateResult.delivery).
+
 El DATA del libro se arma con el DIMS que sube el usuario (cualquier orden de columnas, con o sin
-TRACKER / HAZMAT / RACK) en el orden del template; se rellenan N2 (READY DATE), N3:N4 (POD DATE TIME),
-Q (SERVICE LEVEL) y R (DELIVERY DATE) en cada renglon del BOL.
+TRACKER / HAZMAT / RACK) en el orden del template; se rellenan N2 (READY DATE), N3:N4 (POD DATE TIME)
+y Q (SERVICE LEVEL) en cada renglon del BOL. DELIVERY DATE (R) queda vacia.
 """
 from __future__ import annotations
 
@@ -47,7 +48,6 @@ HEADERS_FILE = Path(__file__).parent / "assets" / "DATE_HEADERS.json"
 SHIPPER_NUMBER = {"BEX": "149570", "VRP": "144463"}
 STATION = "DFW"
 PICKUP_CLOSE = "1700"
-DELIVERY_TIME = "1600"
 PRODUCT_CODE = "HPDOM"
 BILLTO_REF_TYPE = "RAX"
 
@@ -255,8 +255,6 @@ def build_date_row(row: ShipmentRow, ready: str, priority: str = "") -> DateResu
         "T": row.consignee,
         "AB": row.name,
         "AC": row.phone,
-        "AF": delivery,
-        "AG": DELIVERY_TIME,
         "AK": service,
         "CO": PRODUCT_CODE,
         "DJ": BILLTO_REF_TYPE,
@@ -313,7 +311,6 @@ def _write_data_sheet(ws, dims: DimsSheet, results: Mapping[str, DateResult], re
         result = results.get(barcode_text(row.get("barcode")))
         if result:
             line[column_index_from_string(letter_of["service"]) - 1] = result.service or None
-            line[column_index_from_string(letter_of["delivery"]) - 1] = result.delivery or None
         ws.append(line)
     ws["N2"] = ready or None
     if extras.get("pod"):

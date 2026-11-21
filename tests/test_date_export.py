@@ -24,7 +24,7 @@ def test_date_sheet_matches_template_columns():
     row = {c: sheet[f"{c}2"].value for c in ("A", "B", "E", "Q", "R", "S", "AB", "AC", "AF", "AG", "AK", "CO", "DJ", "DK", "DU")}
     assert row == {
         "A": "DFW", "B": 3049901, "E": "144463", "Q": "11/19/26", "R": " 1356", "S": "1700",
-        "AB": "Jane Testwell", "AC": "1+15551230147", "AF": "11/24/26", "AG": "1600",
+        "AB": "Jane Testwell", "AC": "1+15551230147", "AF": None, "AG": None,  # la entrega no va al Excel
         "AK": "3D", "CO": "HPDOM", "DJ": "RAX", "DK": "0", "DU": "jane@example.com",
     }
     assert sheet["E3"].value == "149570" and sheet["DK3"].value == "1" and sheet["AK3"].value == "6D"
@@ -94,7 +94,7 @@ def test_full_workbook_builds_data_from_dims_in_template_order():
         "CARRIER", "Barcode", "Actual Weight", "READY DATE", "SERVICE LEVEL", "DELIVERY DATE"]
     assert data["G2"].value == 100  # el peso va en G aunque el DIMS traiga TRACKER antes
     assert data["S1"].value == "TRACKER" and data["S2"].value == "j1"
-    assert (data["Q2"].value, data["R2"].value) == ("3D", "11/24/26")
+    assert (data["Q2"].value, data["R2"].value) == ("3D", None)  # service level si; DELIVERY DATE vacia
     assert data["N2"].value == "11/19/26 1356" and data["N3"].value == "POD DATE TIME" and data["N4"].value == "11/19/26 20:54"
     assert data["O18"].value == "LEFT PLANT 11/19/26 1356 ARRIVED AT 11/19/26 20:54"
 
@@ -126,8 +126,8 @@ def test_ready_is_optional_and_leaves_dependent_fields_blank():
     row = de.ShipmentRow("3049901", state="TX", carrier="VRP")
     result = de.build_date_row(row, "")
     values = result.values
-    assert (values["Q"], values["R"], values["S"], values["AF"]) == ("", "", "", "")
-    assert values["AG"] == "1600" and values["AK"] == "3D" and values["E"] == "144463"
+    assert (values["Q"], values["R"], values["S"]) == ("", "", "")
+    assert values["AK"] == "3D" and values["E"] == "144463" and "AF" not in values and "AG" not in values
     assert "no_ready" in result.warnings and result.delivery == ""
 
 
@@ -142,3 +142,26 @@ def test_consignee_number_goes_in_column_t_only_when_given():
     blob, _ = de.build_workbook(rows, "11/19/26 1356", None, include_data=False)
     sheet = load_workbook(io.BytesIO(blob))["DATE"]
     assert [sheet[f"T{n}"].value for n in (2, 3, 4)] == ["147229", "210475", None]
+
+
+def test_delivery_is_never_written_but_ready_date_is_in_every_workbook():
+    ready = "11/19/26 1356"
+    dims = de.read_dims(
+        _dims_xlsx(["CARRIER", "Barcode", "Length", "Width", "Height", "Actual Weight"], [["VRP", 3049901, 10, 10, 10, 100]]),
+        "d.xlsx",
+    )
+    rows = _rows()[:1]
+    full, results = de.build_workbook(rows, ready, dims, include_data=True)
+    date_only, _ = de.build_workbook(rows, ready, dims, include_data=False)
+    inbond, _ = de.build_workbook(rows, ready, None, include_data=False, priority=de.PRIORITY_INBOND)
+    assert results[0].delivery == "11/24/26"  # se calcula para mostrarla en pantalla
+    for blob in (full, date_only, inbond):
+        sheet = load_workbook(io.BytesIO(blob))["DATE"]
+        # READY DATE: Pickup Date / Time / Close Time en todos los libros
+        assert (sheet["Q2"].value, sheet["R2"].value, sheet["S2"].value) == ("11/19/26", " 1356", "1700")
+        # Scheduled Delivery Date / Time (AF, AG): vacias; el service level (AK) se conserva
+        assert (sheet["AF1"].value, sheet["AG1"].value) == ("Scheduled Delivery Date", "Scheduled Delivery Time")
+        assert (sheet["AF2"].value, sheet["AG2"].value, sheet["AK2"].value) == (None, None, "3D")
+    data = load_workbook(io.BytesIO(full))["DATA"]
+    assert data["N2"].value == ready and data["Q2"].value == "3D" and data["R2"].value is None
+    assert "DELIVERY DATE" in [c.value for c in data[1]]  # el encabezado se queda para no mover columnas
