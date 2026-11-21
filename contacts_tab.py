@@ -44,8 +44,8 @@ TEXT: dict[str, dict[str, str]] = {
         "ct_cmp_carrier": "Carrier distinto entre PDF, DIMS y nombre del archivo en: {items}",
         "ct_ready": "READY DATE (opcional, MM/DD/YY HHMM)",
         "ct_ready_help": (
-            "Ejemplo: 11/19/26 1356. Se usa para calcular la fecha de entrega con el cut-off 0800–1700 y para el "
-            "mensaje LEFT PLANT. Si lo dejas vacío, esos campos quedan en blanco."
+            "Ejemplo: 11/19/26 1356. Va al Excel (Pickup Date, Time y Close Time), se usa para calcular la entrega "
+            "que ves en pantalla (cut-off 0800–1700) y para el mensaje LEFT PLANT. Si lo dejas vacío, esos campos quedan en blanco."
         ),
         "ct_ready_invalid": "El READY DATE no es válido. Usa el formato 11/19/26 1356.",
         "ct_push_warn": (
@@ -188,8 +188,8 @@ TEXT: dict[str, dict[str, str]] = {
         "ct_cmp_carrier": "Carrier differs between PDF, DIMS and file name in: {items}",
         "ct_ready": "READY DATE (optional, MM/DD/YY HHMM)",
         "ct_ready_help": (
-            "Example: 11/19/26 1356. Used to compute the delivery date with the 0800–1700 cut-off and for the "
-            "LEFT PLANT message. If you leave it empty, those fields stay blank."
+            "Example: 11/19/26 1356. Goes to the Excel (Pickup Date, Time and Close Time), is used to compute the delivery "
+            "shown on screen (0800–1700 cut-off) and for the LEFT PLANT message. If you leave it empty, those fields stay blank."
         ),
         "ct_ready_invalid": "The READY DATE is not valid. Use the format 11/19/26 1356.",
         "ct_push_warn": (
