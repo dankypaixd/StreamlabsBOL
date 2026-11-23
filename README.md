@@ -90,6 +90,26 @@ marcadas; al desmarcarlas esas columnas salen vacías y la tabla de vista previa
 número ya estaba en la lista, queda un solo registro: el que ya estaba confirmado o, si no, el que acabas de corregir (se
 suman sus páginas). Se avisa con un mensaje arriba de los resultados y el conteo de BOL baja.
 
+**Lectura del BOL reforzada.** El número de BOL se lee de dos lugares de la página (el encabezado y la fila *Tracking No*).
+Si los dos coinciden en una lectura rápida, listo; si no, cada recorte se vuelve a leer con 16 versiones (4 escalas × 4
+tratamientos de la imagen) y se vota el número completo. Pasa a 🟢 solo si el número es fiable: las dos fuentes coinciden o una
+lo lee con claridad (≥ 70 % de las lecturas). Además:
+
+- *Dígito dividido.* Si la mitad de las lecturas dicen `96433794` y la otra mitad `98433794`, aunque encabezado y fila
+  coincidan el BOL queda en 🟡 y la tarjeta ofrece el botón **Usar 98433794** (el 4↔8, 1↔4↔7, 6↔8… se lee igual en los dos
+  lugares). Una coincidencia exacta con la memoria ya no esconde un BOL dudoso.
+- *Páginas “1 OF 2” / “2 OF 2”.* Se lee “Page: n OF m” del encabezado; una segunda página consecutiva cuyo BOL difiere en uno o
+  dos dígitos y viene dudosa se une a la primera en vez de contarse como otro BOL.
+- *Parecido a otro BOL de la lista.* Un BOL dudoso que difiere en un solo dígito de otro ya leído muestra “Usar ese BOL”;
+  nunca se corrige solo (los BOL consecutivos sí pueden diferir en un dígito).
+
+**Nombre y correo en varias líneas.** Si el nombre o el correo se escribieron en renglones distintos, se vuelven a armar:
+el `.com` (o `com`) que quedó abajo, el salto justo después de la `@`, la `@` al inicio de la línea, el punto leído como espacio
+o dos puntos (`fakehp : com`) y las manchas del escaneo (`|`). Solo se une si el resultado es un correo válido, para no tragarse el
+teléfono. Si aun así falta la terminación, se vuelve a leer la zona de la derecha y de abajo y se acepta una terminación conocida
+si coinciden 2 de 3 lecturas. Las palabras sueltas de baja confianza (`a`, `seh:`) y los símbolos aislados se quitan del nombre,
+y las confusiones `i/l/I` del correo se desempatan con el nombre (queda en 🟡).
+
 **El archivo sale sin formato, para importarlo tal cual.** Antes había que copiar la hoja y pegarla como “solo valores” en otra.
 El motivo: el archivo traía el primer renglón inmovilizado, anchos en las 198 columnas y los textos guardados “en línea”
 (no como los guarda Excel). Ahora se escribe con XlsxWriter sin anchos, sin paneles, sin estilos y con textos compartidos; las

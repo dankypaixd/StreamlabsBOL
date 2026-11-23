@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Protocol
 
 from contact_extractor import (
+    MAYBE_AGREEMENT,
     FieldRead,
     PageRead,
     PdfRead,
@@ -126,6 +127,41 @@ def _merge(fields: list[FieldRead], normalizer=lambda s: s, prefer=None) -> Fiel
     return vote(reads, normalizer, weights, prefer)
 
 
+def _merge_bol(fields: list[FieldRead]) -> FieldRead:
+    """Une el BOL de varias paginas usando la confiabilidad que ya calculo cada pagina (`agreement`).
+
+    Si todas leen lo mismo, dos paginas independientes se refuerzan; si difieren, gana la mas fiable y el
+    acuerdo baja (la fila queda para revisar).
+    """
+    present = [f for f in fields if f.value]
+    if not present:
+        return FieldRead(reads=[r for f in fields for r in f.reads])
+    score: dict[str, float] = defaultdict(float)
+    for item in present:
+        score[item.value] += max(item.agreement, 0.01)
+    best = max(score, key=lambda v: (score[v], max(f.conf for f in present if f.value == v)))
+    members = [f for f in present if f.value == best]
+    if len(score) == 1:
+        miss = 1.0
+        for item in members:
+            miss *= 1.0 - min(item.agreement, 1.0)
+        agreement = 1.0 - miss
+    else:
+        agreement = score[best] / sum(score.values())
+        agreement = min(agreement, max(f.agreement for f in members))
+    # Un digito dividido en una pagina sigue siendo duda, salvo que otra pagina lo lea sin ninguna duda.
+    alts = [f.alt for f in members if f.alt and f.alt != best]
+    sure_elsewhere = any(f.agreement >= AGREE_BOL and not f.alt for f in members)
+    alt = alts[0] if alts and not sure_elsewhere else ""
+    if alt:
+        agreement = min(agreement, MAYBE_AGREEMENT)
+    reads = [r for f in fields for r in f.reads]
+    return FieldRead(
+        value=best, conf=sum(f.conf for f in members) / len(members), agreement=agreement, reads=reads,
+        weights=[w for f in fields for w in (f.weights or [1.0] * len(f.reads))], support=agreement, alt=alt,
+    )
+
+
 def _merge_phone(fields: list[FieldRead]) -> FieldRead:
     reads: list[tuple[str, float | None]] = []
     weights: list[float] = []
@@ -159,15 +195,42 @@ def _ratio(a: str, b: str) -> float:
 # ------------------------------------------------------------ unir paginas
 
 
+def _hamming(a: str, b: str) -> int:
+    return sum(x != y for x, y in zip(a, b)) if len(a) == len(b) else 99
+
+
+def continues_bol(prev: PageRead, page: PageRead) -> bool:
+    """La pagina es la continuacion (2 OF 2) de la anterior y sus numeros de BOL no se contradicen de verdad.
+
+    Se exige que el total de paginas coincida y que el BOL, si difiere, sea casi igual (<= 2 digitos) y que al
+    menos una de las dos lecturas sea dudosa; dos lecturas fiables y distintas son BOL distintos.
+    """
+    if not (prev.page_of and page.page_of) or page.page_no != prev.page_no + 1:
+        return False
+    if page.page_of[1] != prev.page_of[1] or page.page_of[0] != prev.page_of[0] + 1:
+        return False
+    a, b = prev.bol, page.bol
+    if not b.value or not a.value or a.value == b.value:
+        return True
+    return _hamming(a.value, b.value) <= 2 and (a.agreement < 1.0 or b.agreement < 1.0)
+
+
 def merge_pages(pdfs: Iterable[PdfRead]) -> list[Contact]:
     """Una contacto por BOL. Las paginas 1 OF 2 / 2 OF 2 se leen como dos lecturas."""
     groups: dict[str, list[tuple[str, PageRead]]] = defaultdict(list)
     for pdf in pdfs:
+        prev_key, prev_page = "", None
         for page in pdf.pages:
             if page.kind != "bol":
+                prev_key, prev_page = "", None
                 continue
             key = page.bol.value or f"?{pdf.filename}#{page.page_no}"
+            # "2 OF 2" justo despues de "1 OF 2" es el mismo BOL: si el numero se leyo distinto en una de las dos
+            # paginas por un digito mal visto, no se vuelve un BOL mas.
+            if prev_page is not None and continues_bol(prev_page, page):
+                key = prev_key
             groups[key].append((pdf.filename, page))
+            prev_key, prev_page = key, page
 
     contacts: list[Contact] = []
     for key, items in groups.items():
@@ -178,7 +241,7 @@ def merge_pages(pdfs: Iterable[PdfRead]) -> list[Contact]:
         email, picked = prefer_name_coherent_email(email, name.value)
         phone = _merge_phone([p.phone for p in pages])
         state = _merge([p.state for p in pages])
-        bol = _merge([p.bol for p in pages])
+        bol = _merge_bol([p.bol for p in pages])
 
         contact = Contact(
             key=key,
@@ -223,6 +286,8 @@ def merge_pages(pdfs: Iterable[PdfRead]) -> list[Contact]:
         ):
             if any(flag in p.reasons for p in pages):
                 contact.reasons.append(flag)
+        if bol.alt:
+            contact.reasons.append(f"bol_alt:{bol.alt}")
         if any(p.email_near_edge for p in pages):
             contact.reasons.append("email_near_edge")
         if all(p.empty_block for p in pages):
@@ -369,11 +434,12 @@ def classify(
     # Una correccion aproximada (memory_fix) es una suposicion: nunca cuenta como exacta.
     fixed_by_memory = any(r.startswith("memory_fix") for r in contact.reasons)
     memory_exact = not fixed_by_memory and is_memory_exact(contact, memory)
-    if not hard and not memory_exact:
+    if not hard:
+        # Una coincidencia exacta con la memoria absorbe las dudas del contacto, nunca las del BOL ni del estado.
         thresholds = (
             ("name", AGREE_NAME), ("email", AGREE_EMAIL), ("phone", AGREE_PHONE),
             ("state", AGREE_STATE), ("bol", AGREE_BOL), ("phone_prefix", SUPPORT_PHONE_PREFIX),
-        ) if need_contact and not empty else (("state", AGREE_STATE), ("bol", AGREE_BOL))
+        ) if need_contact and not empty and not memory_exact else (("state", AGREE_STATE), ("bol", AGREE_BOL))
         for fname, limit in thresholds:
             if contact.agreement.get(fname, 0.0) < limit:
                 soft.append(f"lowagree:{fname}")
@@ -381,7 +447,10 @@ def classify(
     flags = [r for r in contact.reasons if r not in informational and not r.startswith("memory_exact")]
     if memory_exact:
         # La coincidencia exacta con memoria absorbe dudas del OCR, no las de BOL/estado.
-        flags = [r for r in flags if r.startswith(("tracking_mismatch", "bol_snapped", "pages_disagree:state"))]
+        flags = [
+            r for r in flags
+            if r.startswith(("tracking_mismatch", "bol_snapped", "bol_alt:", "bol_similar:", "pages_disagree:state"))
+        ]
         contact.reasons.append("memory_exact")
 
     contact.reasons = _dedupe(
@@ -407,6 +476,23 @@ def _dedupe(items: list[str]) -> list[str]:
     return out
 
 
+def flag_similar_bols(contacts: list[Contact]) -> None:
+    """Marca un BOL poco fiable que difiere en un solo digito de otro BOL de la lista (posible mala lectura).
+
+    Los BOL consecutivos si pueden diferir en un digito, por eso solo se marca el dudoso y nunca se corrige solo:
+    la tarjeta ofrece "Usar ese BOL" y, al confirmar, si ya estaba en la lista queda uno solo.
+    """
+    known = {c.bol for c in contacts if c.bol}
+    for contact in contacts:
+        if not contact.bol or contact.agreement.get("bol", 1.0) >= AGREE_BOL:
+            continue
+        near = sorted(
+            b for b in known
+            if b != contact.bol and _hamming(b, contact.bol) == 1 and f"bol_alt:{b}" not in contact.reasons
+        )
+        contact.reasons.extend(f"bol_similar:{b}" for b in near[:2])
+
+
 def build_contacts(
     pdfs: Iterable[PdfRead],
     memory: Memory | None = None,
@@ -420,6 +506,8 @@ def build_contacts(
             apply_memory(contact, memory)
         if data_barcodes:
             snap_to_data(contact, data_barcodes)
+    flag_similar_bols(contacts)
+    for contact in contacts:
         classify(contact, memory, need_contact=need_contact)
     return contacts
 

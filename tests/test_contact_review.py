@@ -187,3 +187,106 @@ def test_no_duplicates_means_nothing_changes():
     assert cr.merge_duplicate_bol(contacts, edited) == [] and len(contacts) == 2
     edited.bol = ""  # sin BOL no se junta con nadie
     assert cr.merge_duplicate_bol(contacts, edited) == [] and len(contacts) == 2
+
+
+# ------------------------------------------------ paginas "1 OF 2" / "2 OF 2" y BOL parecidos
+
+
+def _weak_bol(p, value, agreement=0.5):
+    p.bol = field(value, agreement)
+    return p
+
+
+def test_a_second_page_with_a_misread_digit_joins_the_first_page_instead_of_adding_a_bol():
+    first = page(1, bol="98163300", page_of=(1, 2))
+    second = _weak_bol(page(2, bol="98463300", page_of=(2, 2)), "98463300")  # un 1 leido como 4, con dudas
+    contacts = build([first, second])
+    assert [c.bol for c in contacts] == ["98163300"]
+    assert contacts[0].pages == [1, 2]
+
+
+def test_two_pages_of_one_bol_that_read_the_same_still_make_one_contact():
+    contacts = build([page(1, bol="98163300", page_of=(1, 2)), page(2, bol="98163300", page_of=(2, 2))])
+    assert [c.bol for c in contacts] == ["98163300"] and contacts[0].pages == [1, 2]
+
+
+def test_two_reliable_but_different_numbers_stay_two_bols_even_when_the_pages_look_consecutive():
+    contacts = build([page(1, bol="98163300", page_of=(1, 2)), page(2, bol="98463300", page_of=(2, 2))])
+    assert sorted(c.bol for c in contacts) == ["98163300", "98463300"]
+
+
+def test_pages_are_not_joined_when_the_page_numbers_do_not_follow_or_the_totals_differ():
+    a = page(1, bol="98163300", page_of=(1, 2))
+    far = _weak_bol(page(2, bol="98463300", page_of=(1, 2)), "98463300")  # otra "1 OF 2": otro BOL
+    other_total = _weak_bol(page(2, bol="98463300", page_of=(2, 3)), "98463300")
+    no_page_of = _weak_bol(page(2, bol="98463300"), "98463300")
+    for second in (far, other_total, no_page_of):
+        assert len(build([a, second])) == 2
+    # y un BOL muy distinto (mas de 2 digitos) tampoco se une aunque sea "2 OF 2"
+    unrelated = _weak_bol(page(2, bol="77721100", page_of=(2, 2)), "77721100")
+    assert len(build([page(1, bol="98163300", page_of=(1, 2)), unrelated])) == 2
+
+
+def test_merge_bol_across_pages_uses_each_pages_own_reliability():
+    both = cr._merge_bol([field("98163300", 0.9), field("98163300", 0.9)])
+    assert both.value == "98163300" and both.agreement > 0.98  # dos paginas que coinciden se refuerzan
+    mixed = cr._merge_bol([field("98163300", 1.0), field("98463300", 0.4)])
+    assert mixed.value == "98163300" and mixed.agreement < 1.0  # gana la fiable, pero queda para revisar
+    assert cr._merge_bol([FieldRead(), FieldRead()]).value == ""
+
+
+def test_a_doubtful_bol_one_digit_away_from_another_bol_in_the_list_gets_a_use_that_one_suggestion():
+    sure = page(1, bol="98163300")
+    doubtful = _weak_bol(page(2, bol="98463300"), "98463300")
+    got = {c.bol: c for c in build([sure, doubtful])}
+    assert "bol_similar:98163300" in got["98463300"].reasons
+    assert got["98463300"].status == "doubt"
+    assert not [r for r in got["98163300"].reasons if r.startswith("bol_similar")]
+
+
+def test_consecutive_bols_that_read_with_full_agreement_are_never_flagged_as_similar():
+    contacts = build([page(1, bol="98163300"), page(2, bol="98163301")])
+    assert all(c.status == "ok" for c in contacts)
+    assert not [r for c in contacts for r in c.reasons if r.startswith("bol_similar")]
+
+
+def _split_digit_page(no, bol, alt, **kwargs):
+    p = page(no, bol=bol, **kwargs)
+    p.bol = FieldRead(value=bol, agreement=0.9, reads=[(bol, 90.0)] * 2, weights=[1.0, 1.0], support=0.9, alt=alt)
+    return p
+
+
+def test_a_bol_with_a_split_digit_is_yellow_and_offers_the_other_reading():
+    got = build([_split_digit_page(1, "96433794", "98433794")])[0]
+    assert got.bol == "96433794" and got.status == "doubt"
+    assert "bol_alt:98433794" in got.reasons and "lowagree:bol" in got.reasons
+
+
+def test_the_split_digit_also_sticks_when_two_pages_agree_on_it_but_not_when_one_page_is_sure():
+    both = build([_split_digit_page(1, "96433794", "98433794", page_of=(1, 2)), _split_digit_page(2, "96433794", "98433794", page_of=(2, 2))])[0]
+    assert both.status == "doubt" and "bol_alt:98433794" in both.reasons  # dos paginas dudosas no suman a verde
+    sure = build([_split_digit_page(1, "96433794", "98433794", page_of=(1, 2)), page(2, bol="96433794", page_of=(2, 2))])[0]
+    assert sure.status == "ok" and not [r for r in sure.reasons if r.startswith("bol_alt")]
+
+
+def test_a_split_digit_that_is_also_in_the_list_gives_a_single_suggestion():
+    twin = page(1, bol="98433794")
+    got = {c.bol: c for c in build([twin, _split_digit_page(2, "96433794", "98433794")])}
+    reasons = got["96433794"].reasons
+    assert "bol_alt:98433794" in reasons and "bol_similar:98433794" not in reasons
+
+
+def test_an_exact_memory_match_does_not_hide_a_doubtful_bol(tmp_path):
+    import contact_memory as cm
+
+    memory = cm.ContactMemory(cm.LocalStore(tmp_path / "m.bin"))
+    memory.learn([{"name": "Jane Testwell", "email": "jane.testwell@example.com", "phone": "1+15551230147", "state": "FL", "zip_code": "33126"}])
+    mine = {"email": "jane.testwell@example.com"}
+    assert "memory_exact" in build([page(1, **mine)], memory)[0].reasons  # el contacto ya conocido sigue en verde
+    doubtful = _split_digit_page(1, "96433794", "98433794", **mine)  # mismo contacto, pero el BOL esta dividido
+    got = build([doubtful], memory)[0]
+    assert "memory_exact" in got.reasons and got.status == "doubt" and "bol_alt:98433794" in got.reasons
+    weak = page(1, **mine)
+    weak.bol = field("3049901", 0.5)
+    got = build([weak], memory)[0]
+    assert "memory_exact" in got.reasons and got.status == "doubt"  # BOL poco claro: la memoria no lo da por bueno

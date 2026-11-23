@@ -329,6 +329,7 @@ def _card(t: Callable[..., str], contact: cr.Contact, ready: str, *, ns: str, jo
             state = st.selectbox(t("ct_state"), options, format_func=ct._state_label, key=f"ib_state_{key_k}")
             st.session_state.setdefault(f"ib_bol_{key_k}", contact.bol)
             st.text_input(t("ct_bol"), key=f"ib_bol_{key_k}")
+            ct.similar_bol_buttons(t, contact, prefix="ib", key_k=key_k, k=k)
             carriers = ["", *de.SHIPPER_NUMBER]
             st.session_state.setdefault(f"ib_carrier_{key_k}", contact.carrier if contact.carrier in carriers else "")
             st.selectbox(

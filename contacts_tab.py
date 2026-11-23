@@ -134,6 +134,9 @@ TEXT: dict[str, dict[str, str]] = {
         "r_destination_unsure": "Las lecturas no se pusieron de acuerdo sobre si el destino es México/Latinoamérica: revisa la captura.",
         "r_tracking_mismatch": "El BOL del encabezado no coincide con el de la fila Tracking No.",
         "r_bol_snapped": "El BOL se ajustó al más parecido que está en el DIMS.",
+        "r_bol_similar": "Este BOL se parece al {bol}, que ya está en la lista: puede ser una mala lectura de un dígito.",
+        "r_bol_alt": "El OCR dudó entre este BOL y el {bol}: revisa el dígito que cambia.",
+        "ct_use_bol": "Usar {bol}",
         "r_bol_not_in_data": "Este BOL no está en el DIMS.",
         "r_carrier_mismatch": "El carrier no coincide entre el PDF, el DIMS y el nombre del archivo: revisa cuál es.",
         "r_carrier_unknown": "No se pudo saber si es BEX o VRP: elige el carrier para poner el Shipper Number.",
@@ -262,6 +265,9 @@ TEXT: dict[str, dict[str, str]] = {
         "r_destination_unsure": "The reads disagree on whether the destination is Mexico/Latin America: check the capture.",
         "r_tracking_mismatch": "The header BOL does not match the Tracking No row.",
         "r_bol_snapped": "The BOL was adjusted to the closest one in the DIMS.",
+        "r_bol_similar": "This BOL looks like {bol}, which is already in the list: it may be a one-digit misread.",
+        "r_bol_alt": "The OCR hesitated between this BOL and {bol}: check the digit that differs.",
+        "ct_use_bol": "Use {bol}",
         "r_bol_not_in_data": "This BOL is not in the DIMS.",
         "r_carrier_mismatch": "The carrier differs between the PDF, the DIMS and the file name: check which one it is.",
         "r_carrier_unknown": "Could not tell whether it is BEX or VRP: choose the carrier to set the Shipper Number.",
@@ -302,6 +308,10 @@ def _numeric(value: str) -> tuple[int, str]:
 
 
 def _reason_text(t: Callable[..., str], reason: str) -> str:
+    if reason.startswith("bol_similar:"):
+        return t("r_bol_similar", bol=reason.split(":", 1)[1])
+    if reason.startswith("bol_alt:"):
+        return t("r_bol_alt", bol=reason.split(":", 1)[1])
     if ":" in reason and reason.split(":", 1)[0] in ("pages_disagree", "lowagree"):
         kind, field = reason.split(":", 1)
         return t(f"r_{kind}", field=t(f"f_{field}"))
@@ -400,6 +410,25 @@ def _confirm(key: str) -> None:
         job.setdefault("deduped", []).extend(removed)
 
 
+def use_bol(widget_key: str, bol: str) -> None:
+    """Pone en el campo BOL de la tarjeta el que se sugiere (el usuario sigue teniendo que confirmar)."""
+    st.session_state[widget_key] = bol
+
+
+def similar_bol_buttons(t: Callable[..., str], contact: cr.Contact, *, prefix: str, key_k: str, k: str) -> None:
+    """Un boton "Usar {BOL}" por cada BOL sugerido (el otro valor que dudo el OCR o uno parecido de la lista)."""
+    shown: set[str] = set()
+    for reason in contact.reasons:
+        if reason.startswith(("bol_similar:", "bol_alt:")):
+            bol = reason.split(":", 1)[1]
+            if bol in shown:
+                continue
+            shown.add(bol)
+            st.button(
+                t("ct_use_bol", bol=bol), key=f"{k}_use_{bol}", on_click=use_bol, args=(f"{prefix}_bol_{key_k}", bol),
+            )
+
+
 def _undo(key: str) -> None:
     job = st.session_state.get("ct_job")
     if job and key in job["contacts"]:
@@ -454,6 +483,7 @@ def _card(t: Callable[..., str], contact: cr.Contact, ready: str, *, ns: str) ->
             state = st.selectbox(t("ct_state"), options, format_func=_state_label, key=f"ct_state_{key_k}")
             st.session_state.setdefault(f"ct_bol_{key_k}", contact.bol)
             st.text_input(t("ct_bol"), key=f"ct_bol_{key_k}")
+            similar_bol_buttons(t, contact, prefix="ct", key_k=key_k, k=k)
             carriers = ["", *de.SHIPPER_NUMBER]
             st.session_state.setdefault(f"ct_carrier_{key_k}", contact.carrier if contact.carrier in carriers else "")
             st.selectbox(
