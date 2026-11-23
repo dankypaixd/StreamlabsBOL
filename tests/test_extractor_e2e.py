@@ -23,9 +23,10 @@ def test_reads_synthetic_bols_end_to_end():
     omar = contacts["3049902"]
     assert omar.email == "omar.f@sample.org" and omar.state == "FL"
 
-    # Bloque vacio y estado deducido del ZIP (no estaba escrito): nunca queda en verde
+    # Bloque vacio: ya no es rojo, pero con el estado deducido del ZIP (no estaba escrito) nunca queda en verde
     empty = contacts["3049903"]
-    assert empty.status == "fail" and "empty_block" in empty.reasons
+    assert empty.status == "doubt" and "empty_block" in empty.reasons
+    assert (empty.name, empty.email, empty.phone) == ("", "", "")
     assert empty.state == "PA" and "state_from_zip" in empty.reasons
 
 

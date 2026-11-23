@@ -46,7 +46,7 @@ def test_scanned_bols_are_read_without_contact():
 
 def test_inbond_export_has_inbd_in_priority_code():
     rows = [de.ShipmentRow("3049901", state="TX", carrier="VRP"), de.ShipmentRow("98162916", state="FL", carrier="BEX")]
-    blob, _ = de.build_workbook(rows, "11/19/26 1356", None, include_data=False, priority=de.PRIORITY_INBOND)
+    blob, _ = de.build_workbook(rows, "11/19/26 1356", priority=de.PRIORITY_INBOND)
     sheet = load_workbook(io.BytesIO(blob))["DATE"]
     assert [sheet["FK2"].value, sheet["FK3"].value] == ["INBD", "INBD"]
     assert (sheet["E2"].value, sheet["E3"].value) == ("144463", "149570")
@@ -110,14 +110,31 @@ def _inbonds_app():
     import streamlit as st
 
     import contacts_tab
+    import dims_compare
     import inbonds_tab
 
     if "language" not in st.session_state:
         st.session_state.language = "es"
 
+    class Upload:
+        def __init__(self, name, content):
+            self.name, self._content = name, content
+
+        def getvalue(self):
+            return self._content
+
+    def fake_uploader(label, type=None, accept_multiple_files=False, key=None, help=None):
+        if key == "ib_pdfs" and st.session_state.get("_pdf"):
+            return [Upload("VRP_ci.pdf", st.session_state["_pdf"])]
+        if key == "ib_data" and st.session_state.get("_dims"):
+            return Upload("dims.csv", st.session_state["_dims"])
+        return None
+
+    st.file_uploader = fake_uploader
+
     def t(key, **values):
         lang = st.session_state.language
-        text = {**contacts_tab.TEXT[lang], **inbonds_tab.TEXT[lang]}[key]
+        text = {**contacts_tab.TEXT[lang], **inbonds_tab.TEXT[lang], **dims_compare.TEXT[lang]}[key]
         return text.format(**values) if values else text
 
     inbonds_tab.render(t)
@@ -155,6 +172,59 @@ def test_inbonds_export_has_consignee_number_for_laredo_and_miami():
     by_bol = {c.bol: c for c in contacts}
     assert [by_bol[b].consignee for b in cases] == ["147229", "210475", "147229", ""]
     rows = [de.ShipmentRow(b, state=by_bol[b].state, carrier="VRP", consignee=by_bol[b].consignee) for b in cases]
-    blob, _ = de.build_workbook(rows, "11/19/26 1356", None, include_data=False, priority=de.PRIORITY_INBOND)
+    blob, _ = de.build_workbook(rows, "11/19/26 1356", priority=de.PRIORITY_INBOND)
     sheet = load_workbook(io.BytesIO(blob))["DATE"]
     assert [sheet[f"T{n}"].value for n in (2, 3, 4, 5)] == ["147229", "210475", "147229", None]
+
+
+def _inbonds_with_dims(dims_csv):
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_function(_inbonds_app, default_timeout=120)
+    at.session_state["_pdf"] = make_ci_pdf("3049251", CANADA)
+    if dims_csv is not None:
+        at.session_state["_dims"] = dims_csv
+    at.run()
+    assert not at.exception
+    at.button(key="ib_read_btn").click().run()
+    assert not at.exception
+    return at
+
+
+def _ib_download(at):
+    (button,) = [el for el in at.main if el.type == "download_button"]
+    return button
+
+
+@pytest.mark.skipif(shutil.which("tesseract") is None, reason="Tesseract no instalado")
+def test_inbonds_dims_is_optional_and_only_compares_the_bols():
+    at = _inbonds_with_dims(None)  # sin DIMS se descarga sin pedir nada
+    assert not _ib_download(at).proto.disabled and not at.multiselect
+
+    at = _inbonds_with_dims(b"Barcode,CARRIER\n3049251,VRP\n3049251,VRP\n")  # dos cajas, un BOL: mismo BOL
+    assert any("Los 1 BOL de los PDF son los mismos que los del DIMS" in s.value for s in at.success)
+    assert not _ib_download(at).proto.disabled
+
+    at = _inbonds_with_dims(b"Barcode,CARRIER\n3049251,VRP\n3049999,VRP\n")  # el DIMS trae un BOL de mas
+    assert any("3049999" in m.value for m in at.markdown)
+    assert _ib_download(at).proto.disabled and any("acepta los BOL que no coinciden" in i.value for i in at.info)
+    at.multiselect[0].select("3049999 · solo en DIMS").run()
+    assert not _ib_download(at).proto.disabled  # aceptada la unica diferencia
+
+    at = _inbonds_with_dims(b"Barcode\n3049999\n")  # los PDF no estan en el DIMS y viceversa
+    assert _ib_download(at).proto.disabled
+    next(c for c in at.checkbox if c.label == "Ignorar la comparación").check().run()
+    assert not _ib_download(at).proto.disabled  # ignorada
+
+
+@pytest.mark.skipif(shutil.which("tesseract") is None, reason="Tesseract no instalado")
+def test_inbonds_service_level_can_be_left_out_of_the_date():
+    at = _inbonds_with_dims(None)
+    frames = [d.value for d in at.dataframe if "Consignee No." in d.value.columns]
+    assert len(frames) == 1 and any("ervice" in c for c in frames[0].columns)
+    assert not [c for c in at.checkbox if c.label.startswith("Incluir el Ship To Attention")]  # Inbonds no lee contactos
+
+    at.checkbox(key="ib_include_service").uncheck().run()
+    (frame,) = [d.value for d in at.dataframe if "Consignee No." in d.value.columns]
+    assert not any("ervice" in c for c in frame.columns) and "FK" in frame.columns
+    assert not _ib_download(at).proto.disabled

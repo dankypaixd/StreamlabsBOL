@@ -5,7 +5,7 @@ import fitz
 
 
 def make_bol_pdf(pages: list[dict]) -> bytes:
-    """Cada pagina: bol, name, email, phone, city_line, empty (bool), country (por defecto "US"), address (por defecto "100 MAIN STREET"). Distribucion tipo VRP."""
+    """Cada pagina: bol, name, email, phone, city_line, empty (bool), country (por defecto "US"), address (por defecto "100 MAIN STREET"), lines (opcional: las lineas exactas del Ship To Attention, en lugar de name/email/phone), page ("1 OF 2" por defecto). Distribucion tipo VRP."""
     doc = fitz.open()
     for spec in pages:
         page = doc.new_page(width=612, height=792)
@@ -13,7 +13,7 @@ def make_bol_pdf(pages: list[dict]) -> bytes:
         page.insert_text((412, 66), "Bill of Lading #:", fontname="hebo", fontsize=9)
         page.insert_text((490, 66), spec["bol"], fontname="helv", fontsize=9)
         page.insert_text((412, 80), "Page:", fontname="hebo", fontsize=9)
-        page.insert_text((490, 80), "1 OF 2", fontname="helv", fontsize=9)
+        page.insert_text((490, 80), spec.get("page", "1 OF 2"), fontname="helv", fontsize=9)
         if spec.get("ship_from"):
             page.insert_text((14, 92), "Ship From:", fontname="hebo", fontsize=10)
             for i, line in enumerate(spec["ship_from"]):
@@ -23,15 +23,18 @@ def make_bol_pdf(pages: list[dict]) -> bytes:
             page.insert_text((20, 158 + i * 13), line, fontname="helv", fontsize=8)
         page.insert_text((204, 143), "Ship To Attention:", fontname="hebo", fontsize=10)
         if not spec.get("empty"):
-            for i, line in enumerate([spec["name"], spec["email"], spec["phone"]]):
+            # "lines" permite escribir el bloque a mano (nombre o correo partidos en varias lineas)
+            block = spec.get("lines") or [spec["name"], spec["email"], spec["phone"]]
+            for i, line in enumerate(block):
                 page.insert_text((210, 158 + i * 13), line, fontname="helv", fontsize=8)
-        page.draw_line((14, 205), (598, 205))
-        page.insert_text((14, 222), "Tracking No", fontname="hebo", fontsize=8)
-        page.insert_text((150, 222), "HM", fontname="hebo", fontsize=8)
-        page.insert_text((170, 222), "HPE Product", fontname="hebo", fontsize=8)
-        page.insert_text((170, 232), "Description", fontname="hebo", fontsize=8)
-        page.insert_text((14, 248), spec["bol"], fontname="helv", fontsize=8)
-        page.draw_line((14, 255), (598, 255))
+        extra = max(0, len(spec.get("lines") or []) - 3) * 13  # un bloque mas largo empuja la tabla hacia abajo
+        page.draw_line((14, 205 + extra), (598, 205 + extra))
+        page.insert_text((14, 222 + extra), "Tracking No", fontname="hebo", fontsize=8)
+        page.insert_text((150, 222 + extra), "HM", fontname="hebo", fontsize=8)
+        page.insert_text((170, 222 + extra), "HPE Product", fontname="hebo", fontsize=8)
+        page.insert_text((170, 232 + extra), "Description", fontname="hebo", fontsize=8)
+        page.insert_text((14, 248 + extra), spec["bol"], fontname="helv", fontsize=8)
+        page.draw_line((14, 255 + extra), (598, 255 + extra))
     data = doc.tobytes()
     doc.close()
     return data

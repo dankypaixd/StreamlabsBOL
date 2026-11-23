@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 import contacts_tab
+import dims_compare
 import inbonds_tab
 from bol_generator import BolExtractionError, BolRecord, extract_unique_records, generate_bol_pdf
 from dimension_converter import (
@@ -192,6 +193,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 for _lang, _texts in contacts_tab.TEXT.items():
     TRANSLATIONS[_lang].update(_texts)
 for _lang, _texts in inbonds_tab.TEXT.items():
+    TRANSLATIONS[_lang].update(_texts)
+for _lang, _texts in dims_compare.TEXT.items():
     TRANSLATIONS[_lang].update(_texts)
 
 if "language" not in st.session_state:

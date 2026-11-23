@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Protocol
 
 from contact_extractor import (
+    MAYBE_AGREEMENT,
     FieldRead,
     PageRead,
     PdfRead,
@@ -64,7 +65,7 @@ class Contact:
     source_file: str
     pages: list[int]
     carrier: str = ""  # resultado final (confirmado entre las fuentes de abajo)
-    carrier_sources: dict[str, str] = field(default_factory=dict)  # pdf / dims / file -> BEX|VRP
+    carrier_sources: dict[str, str] = field(default_factory=dict)  # pdf / file -> BEX|VRP
     name: str = ""
     email: str = ""
     phone: str = ""
@@ -93,31 +94,24 @@ def carrier_from_filename(filename: str) -> str:
     return ""
 
 
-def resolve_carrier(pdf: str = "", dims: str = "", file: str = "") -> tuple[str, str]:
+def resolve_carrier(pdf: str = "", file: str = "") -> tuple[str, str]:
     """Carrier final y motivo de duda ("" si todo coincide).
 
-    Se identifica por el contenido del PDF (Ship From, como la pestana 1) y se confirma con la
-    columna CARRIER del DIMS y con el nombre del archivo. Si no coinciden manda la mayoria y,
-    en empate, lo que dice el propio BOL; en ese caso se marca para revisar.
+    Se identifica por el contenido del PDF (Ship From, como la pestana 1) y se confirma con el
+    nombre del archivo. Si no coinciden manda lo que dice el propio BOL; en ese caso se marca para revisar.
     """
-    sources = {"pdf": pdf, "dims": dims, "file": file}
-    found = {k: v for k, v in sources.items() if v in ("BEX", "VRP")}
+    found = {k: v for k, v in {"pdf": pdf, "file": file}.items() if v in ("BEX", "VRP")}
     if not found:
         return "", "carrier_unknown"
-    values = list(found.values())
-    if len(set(values)) == 1:
-        return values[0], ""
-    ranking = sorted(set(values), key=lambda c: (-values.count(c), "pdf" not in found or found["pdf"] != c))
-    return ranking[0], "carrier_mismatch"
+    if len(set(found.values())) == 1:
+        return next(iter(found.values())), ""
+    return found.get("pdf") or found["file"], "carrier_mismatch"
 
 
-def set_carrier(contact: "Contact", dims: str = "") -> None:
+def set_carrier(contact: "Contact") -> None:
     """Calcula contact.carrier con todas las fuentes y deja (o quita) la bandera de duda."""
-    sources = dict(contact.carrier_sources)
-    if dims:
-        sources["dims"] = dims
-    contact.carrier_sources = sources
-    carrier, reason = resolve_carrier(sources.get("pdf", ""), sources.get("dims", ""), sources.get("file", ""))
+    sources = contact.carrier_sources
+    carrier, reason = resolve_carrier(sources.get("pdf", ""), sources.get("file", ""))
     contact.carrier = carrier
     contact.reasons = [r for r in contact.reasons if not r.startswith("carrier_")]
     if reason:
@@ -131,6 +125,41 @@ def _merge(fields: list[FieldRead], normalizer=lambda s: s, prefer=None) -> Fiel
         reads.extend(item.reads)
         weights.extend(item.weights or [1.0] * len(item.reads))
     return vote(reads, normalizer, weights, prefer)
+
+
+def _merge_bol(fields: list[FieldRead]) -> FieldRead:
+    """Une el BOL de varias paginas usando la confiabilidad que ya calculo cada pagina (`agreement`).
+
+    Si todas leen lo mismo, dos paginas independientes se refuerzan; si difieren, gana la mas fiable y el
+    acuerdo baja (la fila queda para revisar).
+    """
+    present = [f for f in fields if f.value]
+    if not present:
+        return FieldRead(reads=[r for f in fields for r in f.reads])
+    score: dict[str, float] = defaultdict(float)
+    for item in present:
+        score[item.value] += max(item.agreement, 0.01)
+    best = max(score, key=lambda v: (score[v], max(f.conf for f in present if f.value == v)))
+    members = [f for f in present if f.value == best]
+    if len(score) == 1:
+        miss = 1.0
+        for item in members:
+            miss *= 1.0 - min(item.agreement, 1.0)
+        agreement = 1.0 - miss
+    else:
+        agreement = score[best] / sum(score.values())
+        agreement = min(agreement, max(f.agreement for f in members))
+    # Un digito dividido en una pagina sigue siendo duda, salvo que otra pagina lo lea sin ninguna duda.
+    alts = [f.alt for f in members if f.alt and f.alt != best]
+    sure_elsewhere = any(f.agreement >= AGREE_BOL and not f.alt for f in members)
+    alt = alts[0] if alts and not sure_elsewhere else ""
+    if alt:
+        agreement = min(agreement, MAYBE_AGREEMENT)
+    reads = [r for f in fields for r in f.reads]
+    return FieldRead(
+        value=best, conf=sum(f.conf for f in members) / len(members), agreement=agreement, reads=reads,
+        weights=[w for f in fields for w in (f.weights or [1.0] * len(f.reads))], support=agreement, alt=alt,
+    )
 
 
 def _merge_phone(fields: list[FieldRead]) -> FieldRead:
@@ -166,15 +195,42 @@ def _ratio(a: str, b: str) -> float:
 # ------------------------------------------------------------ unir paginas
 
 
+def _hamming(a: str, b: str) -> int:
+    return sum(x != y for x, y in zip(a, b)) if len(a) == len(b) else 99
+
+
+def continues_bol(prev: PageRead, page: PageRead) -> bool:
+    """La pagina es la continuacion (2 OF 2) de la anterior y sus numeros de BOL no se contradicen de verdad.
+
+    Se exige que el total de paginas coincida y que el BOL, si difiere, sea casi igual (<= 2 digitos) y que al
+    menos una de las dos lecturas sea dudosa; dos lecturas fiables y distintas son BOL distintos.
+    """
+    if not (prev.page_of and page.page_of) or page.page_no != prev.page_no + 1:
+        return False
+    if page.page_of[1] != prev.page_of[1] or page.page_of[0] != prev.page_of[0] + 1:
+        return False
+    a, b = prev.bol, page.bol
+    if not b.value or not a.value or a.value == b.value:
+        return True
+    return _hamming(a.value, b.value) <= 2 and (a.agreement < 1.0 or b.agreement < 1.0)
+
+
 def merge_pages(pdfs: Iterable[PdfRead]) -> list[Contact]:
     """Una contacto por BOL. Las paginas 1 OF 2 / 2 OF 2 se leen como dos lecturas."""
     groups: dict[str, list[tuple[str, PageRead]]] = defaultdict(list)
     for pdf in pdfs:
+        prev_key, prev_page = "", None
         for page in pdf.pages:
             if page.kind != "bol":
+                prev_key, prev_page = "", None
                 continue
             key = page.bol.value or f"?{pdf.filename}#{page.page_no}"
+            # "2 OF 2" justo despues de "1 OF 2" es el mismo BOL: si el numero se leyo distinto en una de las dos
+            # paginas por un digito mal visto, no se vuelve un BOL mas.
+            if prev_page is not None and continues_bol(prev_page, page):
+                key = prev_key
             groups[key].append((pdf.filename, page))
+            prev_key, prev_page = key, page
 
     contacts: list[Contact] = []
     for key, items in groups.items():
@@ -185,7 +241,7 @@ def merge_pages(pdfs: Iterable[PdfRead]) -> list[Contact]:
         email, picked = prefer_name_coherent_email(email, name.value)
         phone = _merge_phone([p.phone for p in pages])
         state = _merge([p.state for p in pages])
-        bol = _merge([p.bol for p in pages])
+        bol = _merge_bol([p.bol for p in pages])
 
         contact = Contact(
             key=key,
@@ -230,6 +286,8 @@ def merge_pages(pdfs: Iterable[PdfRead]) -> list[Contact]:
         ):
             if any(flag in p.reasons for p in pages):
                 contact.reasons.append(flag)
+        if bol.alt:
+            contact.reasons.append(f"bol_alt:{bol.alt}")
         if any(p.email_near_edge for p in pages):
             contact.reasons.append("email_near_edge")
         if all(p.empty_block for p in pages):
@@ -337,15 +395,17 @@ def classify(
     Con ``need_contact=False`` (pestana Inbonds) no se exige nombre, correo ni telefono.
     """
     hard: list[str] = []
-    if need_contact and "empty_block" in contact.reasons:
-        hard.append("empty_block")
+    # Un Ship To Attention vacio en el PDF es normal: queda en verde y el Excel lleva nombre, correo y
+    # telefono en blanco. Si ya trae algun dato (memoria o captura a mano), deja de ser un bloque vacio.
+    empty = "empty_block" in contact.reasons and not (contact.name or contact.email or contact.phone)
+    if not empty:
+        contact.reasons = [r for r in contact.reasons if r != "empty_block"]
     if not contact.bol or contact.key.startswith("?"):
         hard.append("missing:bol")
-    for fname in (("name", "email", "phone") if need_contact else ()):
+    for fname in (("name", "email", "phone") if need_contact and not empty else ()):
         value = getattr(contact, fname)
         if not value:
-            if "empty_block" not in contact.reasons:
-                hard.append(f"missing:{fname}")
+            hard.append(f"missing:{fname}")
         elif not {"name": valid_name, "email": valid_email, "phone": valid_phone}[fname](value):
             hard.append(f"invalid:{fname}")
     if not contact.state:
@@ -374,19 +434,23 @@ def classify(
     # Una correccion aproximada (memory_fix) es una suposicion: nunca cuenta como exacta.
     fixed_by_memory = any(r.startswith("memory_fix") for r in contact.reasons)
     memory_exact = not fixed_by_memory and is_memory_exact(contact, memory)
-    if not hard and not memory_exact:
+    if not hard:
+        # Una coincidencia exacta con la memoria absorbe las dudas del contacto, nunca las del BOL ni del estado.
         thresholds = (
             ("name", AGREE_NAME), ("email", AGREE_EMAIL), ("phone", AGREE_PHONE),
             ("state", AGREE_STATE), ("bol", AGREE_BOL), ("phone_prefix", SUPPORT_PHONE_PREFIX),
-        ) if need_contact else (("state", AGREE_STATE), ("bol", AGREE_BOL))
+        ) if need_contact and not empty and not memory_exact else (("state", AGREE_STATE), ("bol", AGREE_BOL))
         for fname, limit in thresholds:
             if contact.agreement.get(fname, 0.0) < limit:
                 soft.append(f"lowagree:{fname}")
-    informational = {"bol_not_in_data", "bol_not_in_dims", "destination_mexico", "destination_latam"}
+    informational = {"bol_not_in_data", "bol_not_in_dims", "destination_mexico", "destination_latam", "empty_block"}
     flags = [r for r in contact.reasons if r not in informational and not r.startswith("memory_exact")]
     if memory_exact:
         # La coincidencia exacta con memoria absorbe dudas del OCR, no las de BOL/estado.
-        flags = [r for r in flags if r.startswith(("tracking_mismatch", "bol_snapped", "pages_disagree:state"))]
+        flags = [
+            r for r in flags
+            if r.startswith(("tracking_mismatch", "bol_snapped", "bol_alt:", "bol_similar:", "pages_disagree:state"))
+        ]
         contact.reasons.append("memory_exact")
 
     contact.reasons = _dedupe(
@@ -412,24 +476,62 @@ def _dedupe(items: list[str]) -> list[str]:
     return out
 
 
+def flag_similar_bols(contacts: list[Contact]) -> None:
+    """Marca un BOL poco fiable que difiere en un solo digito de otro BOL de la lista (posible mala lectura).
+
+    Los BOL consecutivos si pueden diferir en un digito, por eso solo se marca el dudoso y nunca se corrige solo:
+    la tarjeta ofrece "Usar ese BOL" y, al confirmar, si ya estaba en la lista queda uno solo.
+    """
+    known = {c.bol for c in contacts if c.bol}
+    for contact in contacts:
+        if not contact.bol or contact.agreement.get("bol", 1.0) >= AGREE_BOL:
+            continue
+        near = sorted(
+            b for b in known
+            if b != contact.bol and _hamming(b, contact.bol) == 1 and f"bol_alt:{b}" not in contact.reasons
+        )
+        contact.reasons.extend(f"bol_similar:{b}" for b in near[:2])
+
+
 def build_contacts(
     pdfs: Iterable[PdfRead],
     memory: Memory | None = None,
     data_barcodes: set[str] | None = None,
-    dims_carriers: dict[str, str] | None = None,
     need_contact: bool = True,
 ) -> list[Contact]:
-    """Une paginas, aplica memoria, compara con el DIMS (BOL y carrier) y clasifica."""
+    """Une paginas, aplica memoria, ajusta el BOL contra el DIMS (si hay) y clasifica."""
     contacts = merge_pages(pdfs)
     for contact in contacts:
         if need_contact:
             apply_memory(contact, memory)
         if data_barcodes:
             snap_to_data(contact, data_barcodes)
-        if dims_carriers is not None:
-            set_carrier(contact, dims_carriers.get(contact.bol, ""))
+    flag_similar_bols(contacts)
+    for contact in contacts:
         classify(contact, memory, need_contact=need_contact)
     return contacts
+
+
+def merge_duplicate_bol(contacts: dict[str, Contact], edited: Contact) -> list[str]:
+    """Deja un solo registro por BOL cuando se corrige un BOL a mano y ese numero ya estaba en la lista.
+
+    Si el otro registro ya estaba confirmado se queda ese; si no, se queda el que se acaba de corregir. El que sobra
+    se quita de `contacts` (sus paginas se suman al que se queda cuando son del mismo archivo). Devuelve los BOL
+    cuyo duplicado se quito (vacio si no habia ninguno).
+    """
+    if not edited.bol:
+        return []
+    twins = [c for c in contacts.values() if c is not edited and c.bol == edited.bol]
+    if not twins:
+        return []
+    keep = next((c for c in twins if c.confirmed), edited)
+    for contact in (edited, *twins):
+        if contact is keep:
+            continue
+        if contact.source_file == keep.source_file:
+            keep.pages = sorted(set(keep.pages) | set(contact.pages))
+        contacts.pop(contact.key, None)
+    return [edited.bol]
 
 
 def reclassify(contact: Contact, memory: Memory | None = None, need_contact: bool = True) -> Contact:
@@ -440,6 +542,7 @@ def reclassify(contact: Contact, memory: Memory | None = None, need_contact: boo
     contact.reasons = [
         r for r in contact.reasons
         if r.startswith(("memory_fix", "bol_not_in_data", "carrier_"))
+        or r == "empty_block"  # classify lo quita si ya se escribio algun dato
         # La nota de destino solo sigue valiendo si el estado no se cambio a mano.
         or (r in destination and normalize_state(contact.state) == destination[r])
     ]

@@ -19,9 +19,10 @@ from __future__ import annotations
 
 import difflib
 import io
+import itertools
 import os
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from statistics import mean
@@ -84,6 +85,7 @@ class FieldRead:
     reads: list[tuple[str, float | None]] = field(default_factory=list)
     weights: list[float] = field(default_factory=list)
     support: float = 0.0  # peso de las lecturas que coinciden con el valor exacto / peso total
+    alt: str = ""  # otra lectura casi igual (un digito) con respaldo parecido: el valor es dudoso
 
     @property
     def present(self) -> bool:
@@ -104,6 +106,7 @@ class PageRead:
     tracking_value: str = ""  # lo que dice la fila Tracking No (si existe)
     carrier: str = ""  # "BEX" / "VRP" segun el bloque Ship From del propio BOL ("" si no se vio)
     consignee: str = ""  # Consignee Number (DATE!T) si el Ship To es Laredo / Miami, si no ""
+    page_of: tuple[int, int] | None = None  # "Page: 2 OF 3" del encabezado -> (2, 3)
     empty_block: bool = False
     email_near_edge: bool = False
     reasons: list[str] = field(default_factory=list)
@@ -273,7 +276,104 @@ def valid_name(value: str) -> bool:
 
 def _clean_name(text: str) -> str:
     text = re.sub(r"\s+", " ", text)
-    return re.sub(r"^[\s/|,;:\-_.]+|[\s/|,;:\-_.]+$", "", text)
+    text = re.sub(r"^[\s/|,;:\-_.]+|[\s/|,;:\-_.]+$", "", text)
+    return tidy_name(text)
+
+
+_TLD_WORD = "|".join(sorted(KNOWN_TLDS, key=len, reverse=True))
+_JUNK_TOKEN = re.compile(r"^[^\w@]+$")  # |, -, :, «... : manchas del escaneo que el OCR toma por simbolos
+
+
+def _edit_text(
+    text: str, mapping: list[Char | None] | None, delete: set[int], insert: dict[int, str],
+) -> tuple[str, list[Char | None] | None]:
+    """Quita los indices `delete` y mete texto antes de los indices `insert`, sin perder el mapa de cajas."""
+    out_text: list[str] = []
+    out_map: list[Char | None] = []
+    for index in range(len(text) + 1):
+        if index in insert:
+            out_text.append(insert[index])
+            out_map.extend([None] * len(insert[index]))
+        if index == len(text) or index in delete:
+            continue
+        out_text.append(text[index])
+        if mapping is not None:
+            out_map.append(mapping[index])
+    return "".join(out_text), (out_map if mapping is not None else None)
+
+
+def _has_tld(domain: str) -> bool:
+    tld = domain.rsplit(".", 1)[-1].lower() if "." in domain else ""
+    return bool(tld) and (tld in KNOWN_TLDS or (len(tld) == 2 and tld.isalpha()))
+
+
+def mend_email_breaks(
+    text: str, mapping: list[Char | None] | None = None,
+) -> tuple[str, list[Char | None] | None]:
+    """Vuelve a armar un correo que el OCR o quien lo escribio partio en varias lineas.
+
+    Casos: ".com" (o "com") en la linea de abajo, salto justo despues de la @, la @ al inicio de una linea,
+    espacios alrededor de los puntos y el punto leido como espacio o dos puntos ("fakehp : com"). Solo une cuando el
+    resultado es un correo valido, para no tragarse el telefono ni el nombre. `mapping` (cajas por caracter) se
+    conserva alineado con el texto nuevo.
+    """
+    delete: set[int] = set()
+    insert: dict[int, str] = {}
+    at = text.find("@")
+    if at < 0:
+        return text, mapping
+    start = text.rfind("\n", 0, at) + 1
+    end = text.find("\n", at)
+    end = len(text) if end < 0 else end
+
+    # espacios alrededor de la @ y de los puntos de ese renglon
+    for match in re.finditer(r"\s+(?=[@.])|(?<=[@.])\s+", text[start:end]):
+        delete.update(range(start + match.start(), start + match.end()))
+    # el punto de "dominio com" leido como espacio, dos puntos o coma
+    tail = text[at + 1:end]
+    tail_clean = re.sub(r"[^A-Za-z0-9.\-]", "", tail)
+    gap = re.search(rf"(?i)([A-Za-z0-9\-]+)([\s:;,]+)({_TLD_WORD})\s*$", tail)
+    if gap and not _has_tld(tail_clean):
+        insert[at + 1 + gap.start(3)] = "."
+        delete.update(range(at + 1 + gap.start(2), at + 1 + gap.end(2)))
+        tail_clean = tail_clean.replace(gap.group(3), "." + gap.group(3)) if "." not in tail_clean[-len(gap.group(3)) - 1:] else tail_clean
+
+    # "@" al inicio del renglon: el usuario se quedo en el renglon de arriba
+    head = text[start:at].strip()
+    if not head and start > 0:
+        prev_start = text.rfind("\n", 0, start - 1) + 1
+        prev = text[prev_start:start - 1]
+        if prev.strip() and " " not in prev.strip():
+            delete.update(range(start - 1, start))  # el salto de linea
+            delete.update(i for i in range(start, at) if text[i].isspace())
+
+    # dominio cortado: sin TLD valido, la linea de abajo trae ".com" / "com" / el resto del dominio
+    if end < len(text) and (not tail_clean or not _has_tld(tail_clean) or tail_clean.endswith(".")):
+        next_end = text.find("\n", end + 1)
+        next_end = len(text) if next_end < 0 else next_end
+        nxt = text[end + 1:next_end]
+        piece = re.sub(r"[^A-Za-z0-9.\-]", "", nxt)  # sin espacios ni manchas ("|") del escaneo
+        joined = tail_clean + (piece if piece.startswith(".") or tail_clean.endswith(".") or not tail_clean else "." + piece)
+        local = re.sub(r"\s+", "", text[start:at])
+        candidate = f"{local}@{joined}"
+        shaped = re.fullmatch(r"\.?[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+){0,3}", piece) is not None
+        if piece and shaped and valid_email(candidate):
+            delete.update(range(end, end + 1))  # el salto de linea
+            delete.update(i for i in range(at + 1, end) if not re.match(r"[A-Za-z0-9.\-]", text[i]))  # manchas
+            delete.update(i for i in range(end + 1, next_end) if text[i].isspace())
+            first = next((i for i in range(end + 1, next_end) if not text[i].isspace()), None)
+            if first is not None and not tail_clean.endswith(".") and not piece.startswith(".") and tail_clean:
+                insert[first] = "."
+    if not delete and not insert:
+        return text, mapping
+    return _edit_text(text, mapping, delete, insert)
+
+
+def tidy_name(text: str) -> str:
+    """Nombre en una sola linea: junta los renglones y quita manchas que el OCR leyo como simbolos sueltos."""
+    tokens = [t for t in re.split(r"\s+", text or "") if t and not _JUNK_TOKEN.match(t)]
+    tokens = [re.sub(r"^[^\w(]+|[^\w.)]+$", "", t) for t in tokens]
+    return " ".join(t for t in tokens if t)
 
 
 @dataclass
@@ -284,6 +384,11 @@ class Split:
     name_span: tuple[int, int] | None = None
     email_span: tuple[int, int] | None = None
     phone_span: tuple[int, int] | None = None
+    partial_email: str = ""  # "usuario@dominio" sin terminacion (.com): el OCR no vio el resto
+    partial_span: tuple[int, int] | None = None
+
+
+_PARTIAL_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*")
 
 
 def split_contact(flat: str) -> Split:
@@ -311,6 +416,12 @@ def split_contact(flat: str) -> Split:
     elif not email_match:
         out.name = _clean_name(flat)
         out.name_span = (0, len(flat))
+    if not valid_email(out.email):
+        partial = _PARTIAL_EMAIL_RE.search(flat)
+        if partial:
+            out.partial_email, out.partial_span = partial.group(0).strip("."), partial.span()
+    if "@" in out.name:  # un correo incompleto (sin dominio valido) no es parte del nombre
+        out.name = " ".join(t for t in out.name.split() if "@" not in t)
     return out
 
 
@@ -333,17 +444,38 @@ def _join_texts(texts: list[str], wrapped: list[bool]) -> str:
     return out
 
 
+def drop_noise_words(words: list[OcrWord]) -> list[OcrWord]:
+    """Quita lo que el OCR lee de las manchas del escaneo: simbolos sueltos ("|") y palabras cortas muy dudosas.
+
+    Una palabra corta con confianza baja ("a", "seh:") junto a palabras bien leidas casi nunca es parte del nombre;
+    se conserva si es lo unico que hay en el renglon.
+    """
+    kept: list[OcrWord] = []
+    by_line: dict[tuple[int, int, int], list[OcrWord]] = defaultdict(list)
+    for word in words:
+        by_line[word.line_id].append(word)
+    for word in words:
+        core = re.sub(r"[^\w@]", "", word.text)
+        if not core:
+            continue  # solo simbolos (|, -, :, /): manchas o separadores
+        peers = [w for w in by_line[word.line_id] if w is not word and w.conf >= 60]
+        if word.conf < 40 and len(core) <= 4 and "@" not in word.text and not core.isdigit() and peers:
+            continue
+        kept.append(word)
+    return kept
+
+
 def parse_words(words: list[OcrWord]) -> tuple[Split, float, float, float]:
     """Parseo a partir de palabras OCR. Devuelve (split, conf_nombre, conf_correo, conf_tel)."""
-    lines = _lines(words)
+    lines = _lines(drop_noise_words(words))
     texts = [re.sub(r"\s*@\s*", "@", " ".join(w.text for w in line)) for line in lines]
     texts = [re.sub(r"(@[\w\-]+)\s*\.\s*(?=\w)", r"\1.", t) for t in texts]
-    split = split_contact("\n".join(texts))
+    split = split_contact(mend_email_breaks("\n".join(texts))[0])
     if not valid_email(split.email):
         # BEX corta la cadena NOMBRE/correo/telefono por ancho, incluso en medio del correo.
         wrapped = _wrapped_flags(_line_right_edges(lines)) if lines else []
         if any(wrapped[:-1]):
-            alt = split_contact(_join_texts(texts, wrapped))
+            alt = split_contact(mend_email_breaks(_join_texts(texts, wrapped))[0])
             if valid_email(alt.email):
                 split = alt
     name_words, email_words, phone_words = [], [], []
@@ -603,6 +735,39 @@ def _email_name_coherence(email: str, name: str) -> float:
     return max(difflib.SequenceMatcher(None, local, p).ratio() for p in patterns)
 
 
+def fix_email_glyphs_by_name(email: FieldRead, name: str) -> tuple[FieldRead, bool]:
+    """Corrige i/l/I confundidas en la parte local del correo cuando el nombre las deja en evidencia.
+
+    "dvaidivia@..." con el nombre "Daniel Valdivia" casi seguro es "dvaldivia". Solo prueba cambios entre i, l e I
+    (lo que el escaneo confunde) y exige que el resultado cuadre con un patron tipico del nombre y mejore con
+    claridad; el correo queda con acuerdo bajo para que se revise.
+    """
+    value = email.value
+    local, _, domain = value.partition("@")
+    if not name or not local or not domain:
+        return email, False
+    base = _email_name_coherence(value, name)
+    positions = [i for i, ch in enumerate(local) if ch in "ilI"]
+    if base >= 0.99 or not positions or len(positions) > 5:
+        return email, False
+    best_score, best_local = base, local
+    for combo in itertools.product("il", repeat=len(positions)):
+        chars = list(local)
+        for position, letter in zip(positions, combo):
+            chars[position] = letter
+        candidate = "".join(chars)
+        score = _email_name_coherence(f"{candidate}@{domain}", name)
+        if score > best_score:
+            best_score, best_local = score, candidate
+    if best_score < 0.97 or best_score - base < 0.04 or best_local.lower() == local.lower():
+        return email, False
+    fixed = f"{best_local}@{domain}"
+    return FieldRead(
+        value=fixed, conf=email.conf, agreement=min(email.agreement, 0.7), reads=email.reads + [(fixed, None)],
+        weights=email.weights + [0.0], support=min(email.support, 0.7),
+    ), True
+
+
 def prefer_name_coherent_email(email: FieldRead, name: str) -> tuple[FieldRead, bool]:
     """Desempata correos casi iguales a favor del que cuadra con el nombre.
 
@@ -762,6 +927,66 @@ def _find_anchors(words: list[OcrWord], width: float, height: float) -> _Anchors
     )
 
 
+_PAGE_OF_RE = re.compile(r"(?<!\d)(\d{1,2})\s*(?:OF|0F|DF)\s*(\d{1,2})(?!\d)", re.IGNORECASE)
+
+
+def parse_page_of(words: list[OcrWord], lading_y0: float, width: float, height: float) -> tuple[int, int] | None:
+    """Lee "Page: 2 OF 3" cerca del "Bill of Lading #" (esquina superior derecha)."""
+    near = [
+        w for w in words
+        if lading_y0 - 0.012 * height <= w.y0 <= lading_y0 + 0.07 * height and w.x0 > 0.45 * width
+    ]
+    for line in _lines(near):
+        match = _PAGE_OF_RE.search(" ".join(w.text for w in line))
+        if match:
+            number, total = int(match.group(1)), int(match.group(2))
+            if 1 <= number <= total <= 30:
+                return number, total
+    return None
+
+
+_ENDING_RE = re.compile(rf"\.?({_TLD_WORD})(?:\.[a-z]{{2}})?", re.IGNORECASE)
+
+
+def _rescue_email_ending(att_gray: Image.Image, split: Split, mapping: list[Char | None]) -> str:
+    """El OCR vio "usuario@dominio" pero no la terminacion (.com): se relee a la derecha y en el renglon de abajo.
+
+    Solo se acepta una terminacion conocida que al menos 2 de 3 lecturas den igual (un recorte vacio inventa letras).
+    """
+    boxes = span_boxes(split.partial_span, mapping)
+    if not boxes:
+        return ""
+    last = boxes[-1]
+    height = max(8.0, last[3] - last[1])
+    strips = [
+        (last[2] - 2, last[1] - 3, last[2] + 90, last[3] + 3),  # mismo renglon, a la derecha
+        (boxes[-1][0] - 4, last[3] + 1, last[0] + 110, last[3] + 1.9 * height),  # renglon de abajo
+    ]
+    for strip in strips:
+        found: list[str] = []
+        for text_read, _ in _read_line(_crop(att_gray, strip), EMAIL_CHARS, count=3):
+            match = _ENDING_RE.fullmatch(re.sub(r"[^A-Za-z.]", "", text_read))
+            if match:
+                found.append(("." + match.group(0).lstrip(".")).lower())
+        if found:
+            ending, count = max(((e, found.count(e)) for e in set(found)), key=lambda item: item[1])
+            if count >= 2:
+                return split.partial_email.rstrip(".") + ending
+    return ""
+
+
+def reread_page_of(gray: Image.Image, box: Box) -> tuple[int, int] | None:
+    """Relee "Page: n OF m" (debajo del "Bill of Lading #") con letras y digitos permitidos (3 lecturas)."""
+    found: list[tuple[int, int]] = []
+    for text, _ in _read_line(_crop(gray, box), "0123456789OFDof ", count=3):
+        match = _PAGE_OF_RE.search(text.upper())
+        if match and 1 <= int(match.group(1)) <= int(match.group(2)) <= 30:
+            found.append((int(match.group(1)), int(match.group(2))))
+    if not found:
+        return None
+    return max(set(found), key=found.count)  # basta una lectura limpia: la union de paginas pide ademas BOL casi igual
+
+
 def _crop(gray: Image.Image, box: Box) -> Image.Image:
     x0, y0, x1, y1 = (int(round(v)) for v in box)
     x0, y0 = max(0, x0), max(0, y0)
@@ -778,9 +1003,117 @@ def _read_line(gray: Image.Image, whitelist: str, count: int = 2) -> list[tuple[
     reads: list[tuple[str, float]] = []
     config = f"--psm 7 -c tessedit_char_whitelist={whitelist} -c load_system_dawg=0 -c load_freq_dawg=0"
     for img, _, _ in _variants(gray, count):
-        words = _ocr_words(img, config)
+        try:
+            words = _ocr_words(img, config)
+        except pytesseract.TesseractError:  # una imagen rara no debe tumbar la lectura de la pagina
+            reads.append(("", 0.0))
+            continue
         reads.append(("".join(w.text for w in words), _mean_conf(words)))
     return reads
+
+
+# Lectura reforzada de un numero (BOL): mismas lineas con distinta escala y umbral. Un digito confundido (1/4/7,
+# 3/8, 0/6...) casi nunca se confunde igual en todas las versiones, asi que el voto lo corrige.
+DIGIT_SCALES = (2, 3, 4, 5)
+DIGIT_KINDS = ("ac", "otsu", "otsu-18", "thick")
+STRONG_SHARE = 0.7  # un numero leido igual en al menos el 70% de las lecturas es fiable (en pruebas: 100% correcto)
+MAYBE_AGREEMENT = 0.9  # acuerdo maximo de un BOL con dudas: queda en amarillo (el verde pide 0.99)
+RIVAL_MIN_VOTES = 3  # un numero casi igual con al menos 3 lecturas...
+RIVAL_RATIO = 0.5  # ...y la mitad de las del ganador deja el digito dividido
+_DIGIT_CONFIG = "--psm 7 -c tessedit_char_whitelist=0123456789 -c load_system_dawg=0 -c load_freq_dawg=0"
+
+
+def _digit_variants(gray: Image.Image) -> list[Image.Image]:
+    out: list[Image.Image] = []
+    for scale in DIGIT_SCALES:
+        base = gray.resize((max(1, gray.width * scale), max(1, gray.height * scale)), Image.LANCZOS)
+        contrast = ImageOps.autocontrast(base, cutoff=1)
+        arr = np.asarray(contrast, dtype=np.uint8)
+        threshold = _otsu(arr)
+        images = {
+            "ac": contrast,
+            "otsu": Image.fromarray(((arr > threshold) * 255).astype(np.uint8)),
+            "otsu-18": Image.fromarray(((arr > threshold - 18) * 255).astype(np.uint8)),  # trazos mas gruesos
+            "thick": contrast.filter(ImageFilter.MinFilter(3)),
+        }
+        out.extend(ImageOps.expand(images[kind], border=14, fill=255) for kind in DIGIT_KINDS)
+    return out
+
+
+def read_number_many(gray: Image.Image) -> list[tuple[str, float]]:
+    """Lecturas de un numero (solo digitos) con muchas versiones de la imagen: [(texto, confianza)]."""
+    reads: list[tuple[str, float]] = []
+    for img in _digit_variants(gray):
+        try:
+            words = _ocr_words(img, _DIGIT_CONFIG)
+        except pytesseract.TesseractError:
+            reads.append(("", 0.0))
+            continue
+        reads.append(("".join(w.text for w in words), _mean_conf(words)))
+    return reads
+
+
+def number_consensus(reads: list[tuple[str, float | None]]) -> FieldRead:
+    """Voto de un numero de 6 a 9 digitos. `agreement` = parte de las lecturas que dan el valor ganador."""
+    return vote([(_digits(text, 6, 9), conf) for text, conf in reads])
+
+
+def bol_rival(header: FieldRead, tracking: FieldRead | None, winner: str) -> str:
+    """Lectura que difiere del BOL ganador en un solo digito y tiene casi tanto respaldo.
+
+    Se cuentan las lecturas de los dos recortes juntas. Dos recortes que coinciden no bastan para fiarse: un 4 que
+    parece 8 (o un 8 que parece 6) se lee igual en los dos lugares de la pagina. Si un numero casi igual recibe al
+    menos la mitad de los votos del ganador, el digito esta dividido y el BOL se revisa a mano.
+    """
+    pooled = Counter(
+        _digits(text, 6, 9) for source in (header, tracking) if source is not None for text, _ in source.reads
+    )
+    pooled.pop("", None)
+    votes = pooled.get(winner, 0)
+    rivals = [(count, value) for value, count in pooled.items() if value != winner and _hamming(value, winner) == 1]
+    if not rivals or not winner:
+        return ""
+    count, value = max(rivals)
+    return value if count >= RIVAL_MIN_VOTES and count >= RIVAL_RATIO * votes else ""
+
+
+def _hamming(a: str, b: str) -> int:
+    return sum(x != y for x, y in zip(a, b)) if len(a) == len(b) else 99
+
+
+def combine_bol(header: FieldRead, tracking: FieldRead | None) -> tuple[FieldRead, str]:
+    """BOL final a partir del encabezado y de la fila Tracking No (dos lugares distintos de la pagina).
+
+    Devuelve (BOL, valor de Tracking No a comparar). `agreement` queda en 1.0 si el numero es fiable: las dos
+    fuentes coinciden o una sola lo lee claramente (>= STRONG_SHARE); si no, queda el porcentaje de acuerdo
+    y la fila sale en amarillo para revisarla. Aunque las fuentes coincidan, si un digito esta dividido entre dos
+    valores (ver `bol_rival`) el BOL queda en amarillo con la otra lectura en `alt`.
+    """
+    bol, track_value = _combine_bol(header, tracking)
+    rival = bol_rival(header, tracking, bol.value)
+    if rival:
+        bol.alt = rival
+        bol.agreement = min(bol.agreement, MAYBE_AGREEMENT)
+    return bol, track_value
+
+
+def _combine_bol(header: FieldRead, tracking: FieldRead | None) -> tuple[FieldRead, str]:
+    h_strong = header.present and header.agreement >= STRONG_SHARE
+    if tracking is None or not tracking.present:
+        if h_strong:
+            header.agreement = 1.0
+        return header, ""
+    t_strong = tracking.agreement >= STRONG_SHARE
+    if header.present and header.value == tracking.value:
+        header.agreement = 1.0
+        return header, tracking.value
+    if h_strong and not t_strong:
+        header.agreement = 1.0  # el Tracking No es la lectura mas floja; no se toma como contradiccion
+        return header, ""
+    if t_strong and not (header.present and h_strong):
+        tracking.agreement = min(tracking.agreement, MAYBE_AGREEMENT)  # solo lo confirma la fila de abajo: se revisa
+        return tracking, tracking.value
+    return header, tracking.value  # ambas fiables y distintas, o ambas flojas: queda marcado
 
 
 def _digits(text: str, min_len: int, max_len: int) -> str:
@@ -851,6 +1184,8 @@ def _read_top(img: Image.Image, source_file: str, page_no: int, contact: bool = 
 
     result.kind = "bol"
     result.carrier = detect_carrier(words, small.height)
+    result.page_of = parse_page_of(words, anchors.lading_y0, small.width, small.height)
+    page_box: Box | None = None
     k = 1 / ANCHOR_SCALE
     a = anchors
     W, _ = gray_full.size
@@ -867,18 +1202,39 @@ def _read_top(img: Image.Image, source_file: str, page_no: int, contact: bool = 
     else:
         trk_box = None
 
-    # --- BOL # (3 fuentes: OCR de anclajes, recorte del encabezado, fila Tracking No)
+    if result.page_of is None:
+        line_h = max(10.0, (a.lading_y1 - a.lading_y0) * k)
+        page_box = (a.right_x0 * k - 6, a.lading_y1 * k + 1, min(W - 2, a.lading_x1 * k + 0.30 * W), a.lading_y1 * k + 2.3 * line_h)
+        result.page_of = reread_page_of(gray_full, page_box)
+
+    # --- BOL # (fuentes: OCR de anclajes, recorte del encabezado, fila Tracking No) -------------
+    # Lectura rapida (2 versiones por recorte). Si el encabezado y la fila Tracking No coinciden en todo, listo;
+    # si no, se vuelve a leer cada recorte con muchas versiones (escala y umbral) y se vota.
+    bol_crop = _crop(gray_full, bol_box)
     bol_reads: list[tuple[str, float | None]] = []
     if a.bol_word:
         bol_reads.append((a.bol_word.text, a.bol_word.conf))
-    for text, conf in _read_line(_crop(gray_full, bol_box), "0123456789", count=2):
-        bol_reads.append((_digits(text, 6, 9), conf))
-    result.bol = vote(bol_reads)
-    if trk_box:
-        track_reads = [(_digits(t, 6, 9), c) for t, c in _read_line(_crop(gray_full, trk_box), "0123456789", count=2)]
+    quick = _read_line(bol_crop, "0123456789", count=2)
+    bol_reads.extend((_digits(text, 6, 9), conf) for text, conf in quick)
+    track_reads: list[tuple[str, float | None]] = []
+    track_crop = _crop(gray_full, trk_box) if trk_box else None
+    if track_crop is not None:
+        track_reads = [(_digits(t, 6, 9), c) for t, c in _read_line(track_crop, "0123456789", count=2)]
         if a.track_word:
             track_reads.append((a.track_word.text, a.track_word.conf))
-        result.tracking_value = vote(track_reads).value
+    header, tracking = vote(bol_reads), vote(track_reads) if track_reads else None
+    confirmed = (
+        header.present and header.agreement == 1.0 and tracking is not None and tracking.present
+        and tracking.agreement == 1.0 and tracking.value == header.value
+    )
+    if not confirmed:
+        bol_reads.extend((_digits(text, 6, 9), conf) for text, conf in read_number_many(bol_crop))
+        header = vote(bol_reads)
+        track_ok = tracking is not None and tracking.present and tracking.value == header.value and header.agreement >= STRONG_SHARE
+        if track_crop is not None and not track_ok:
+            track_reads.extend((_digits(text, 6, 9), conf) for text, conf in read_number_many(track_crop))
+            tracking = vote(track_reads)
+    result.bol, result.tracking_value = combine_bol(header, tracking)
 
     # --- Ship To Attention ----------------------------------------------
     att_gray = _cut_at_rule(_crop(gray_full, att_box))
@@ -903,26 +1259,40 @@ def _read_top(img: Image.Image, source_file: str, page_no: int, contact: bool = 
         # Lectura caracter por caracter: ubica correo y telefono con precision.
         img_a, scale_a, pad_a = variants[0]
         text, mapping = read_chars(img_a, scale_a, pad_a)
+        text, mapping = mend_email_breaks(text, mapping)
         split = split_contact(text)
         if not valid_email(split.email):
             text_alt, mapping_alt = rejoin_wrapped(text, mapping)
+            text_alt, mapping_alt = mend_email_breaks(text_alt, mapping_alt)
             split_alt = split_contact(text_alt)
             if valid_email(split_alt.email):
                 text, mapping, split = text_alt, mapping_alt, split_alt
         name_votes.append((split.name, None, 1.0))
         email_votes.append((split.email, None, 1.0))
         phone_votes.append((normalize_phone(split.phone), None, 1.0))
+        if not valid_email(split.email) and split.partial_email:
+            rescued = _rescue_email_ending(att_gray, split, mapping)
+            if rescued:
+                email_votes.append((rescued, None, 2.0))
+                email_votes.append((rescued, None, 2.0))
         name_boxes = span_boxes(split.name_span, mapping)
         email_boxes = span_boxes(split.email_span, mapping)
         phone_boxes = span_boxes(split.phone_span, mapping)
         email_box = email_boxes[0] if email_boxes else None
 
-        # Relectura de recorte ajustado con caracteres permitidos (pesa doble).
-        if email_box:
-            result.email_near_edge = email_box[2] >= att_gray.width - 8
-            tight = (email_box[0] - 2, email_box[1] - 5, email_box[2] + 2, email_box[3] + 5)
-            for text_read, conf in _read_line(_crop(att_gray, tight), EMAIL_CHARS, count=3):
-                match = EMAIL_RE.search(text_read)
+        # Relectura de recorte ajustado con caracteres permitidos (pesa doble). Si el correo ocupa varios
+        # renglones (".com" abajo) se relee cada renglon y se unen, como con el telefono.
+        if email_boxes:
+            result.email_near_edge = any(b[2] >= att_gray.width - 8 for b in email_boxes)
+            fragments = [
+                _read_line(_crop(att_gray, (b[0] - 2, b[1] - 5, b[2] + 2, b[3] + 5)), EMAIL_CHARS, count=3)
+                for b in email_boxes
+            ]
+            for variant_index in range(3):
+                parts = [frag[variant_index] for frag in fragments if variant_index < len(frag)]
+                joined = mend_email_breaks("\n".join(p[0] for p in parts))[0].replace("\n", "")
+                match = EMAIL_RE.search(joined)
+                conf = float(mean(p[1] for p in parts)) if parts else None
                 email_votes.append((match.group(0).strip(".") if match else "", conf, 2.0))
         if phone_boxes:
             fragments = [
@@ -943,7 +1313,8 @@ def _read_top(img: Image.Image, source_file: str, page_no: int, contact: bool = 
         result.email = tally(email_votes, str.lower)
         result.phone = vote_phone([(v, c) for v, c, _ in phone_votes], [w for _, _, w in phone_votes])
         result.email, picked = prefer_name_coherent_email(result.email, result.name.value)
-        if picked:
+        result.email, fixed = fix_email_glyphs_by_name(result.email, result.name.value)
+        if picked or fixed:
             result.reasons.append("email_by_name")
 
     # --- Ship To (estado) --------------------------------------------------
