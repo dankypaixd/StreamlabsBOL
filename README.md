@@ -20,7 +20,8 @@ Aplicación Streamlit para:
 - `contact_review.py`: une las páginas de un BOL, aplica lo aprendido y clasifica en verde / amarillo / rojo.
 - `contact_memory.py`: memoria de contactos confirmados (cifrada, guardada en una rama de GitHub).
 - `service_levels.py`: service level por estado y fecha de entrega con cut-off 0800–1700 (sin fines de semana).
-- `date_export.py`: lee el DIMS (por nombre de columna) y genera las hojas DATE (198 columnas del template) y DATA, los mensajes de cut off y el nombre del archivo.
+- `date_export.py`: genera la hoja DATE (198 columnas del template) **sin formato**, lee la columna Barcode del DIMS, arma los mensajes de cut off y el nombre del archivo.
+- `dims_compare.py`: comparación opcional de los BOL de los PDF contra los del DIMS (contactos e Inbonds), con aceptar / ignorar.
 - `inbonds_tab.py`: pestaña “Inbonds” (BOL o Commercial Invoice → estado, service level y `INBD` en la columna FK).
 - `assets/SERVICE_LEVELS.csv`: lista estado → días (editable). `assets/DATE_HEADERS.json`: encabezados del template.
 - `packages.txt`: paquetes del sistema para Streamlit Cloud (Tesseract OCR).
@@ -60,7 +61,11 @@ campos tal como quedaron escritos, que se pueden editar.
 - 🟢 *Sin error*: nombre, correo y teléfono presentes y válidos, y todas las lecturas del OCR coinciden entre sí.
 - 🟡 *Dudoso*: está todo, pero alguna lectura no coincide, el estado se dedujo del ZIP, el correo se corrigió con
   lo aprendido, las dos páginas del BOL difieren, etc. Cada motivo se explica en la tarjeta.
-- 🔴 *Incompleto*: falta algo (bloque vacío en el PDF, sin teléfono…) o el formato no es válido.
+- 🔴 *Incompleto*: falta algo (sin teléfono, sin estado…) o el formato no es válido.
+
+Un bloque *Ship To Attention* **vacío en el PDF no es error**: queda en 🟢 y el Excel lleva nombre, correo y teléfono en
+blanco (si el estado del Ship To se dedujo del ZIP, sigue en 🟡 por eso). En cuanto se escribe algún dato a mano, deja de
+ser un bloque vacío y se exige el resto.
 
 Un teléfono no tiene formato fijo: se aceptan dígitos y el signo `+`.
 
@@ -71,12 +76,17 @@ sigue calculando. Supuestos que no estaban en la especificación (ajustables ah�
 siguiente día hábil; antes de las 08:00 el día 0 es el mismo día; un READY DATE en fin de semana arranca el lunes; no se
 descuentan feriados (`HOLIDAYS`).
 
-**Excel de salida.** Con el DIMS subido el libro trae las hojas `DATE` y `DATA` (la app arma DATA con el orden del
-template; Q (service level) relleno por BOL; el TRACKER, si viene, va en la columna S). La hoja `DATE` tiene las 198 columnas del
+**Excel de salida.** Solo se descarga la hoja `DATE` (ya no hay hoja `DATA` ni libro completo). Tiene las 198 columnas del
 template; se llenan A, B, E, Q, R, S (READY DATE: Pickup Date, Time y Close Time), T (Consignee Number), AB, AC, AK, CO, DJ, DK y DU
-con los mismos valores que calculan tus fórmulas. **La fecha y hora de entrega (AF y AG en DATE, DELIVERY DATE en DATA) quedan
-vacías en todos los Excel**; los encabezados se conservan para no mover columnas. También se puede bajar solo `DATE`.
-Por defecto, los dudosos e incompletos sin confirmar salen con nombre, correo y teléfono vacíos (casilla en pantalla).
+con los mismos valores que calculan tus fórmulas. **La fecha y hora de entrega (AF y AG) quedan vacías**; los encabezados se
+conservan para no mover columnas. Por defecto, los dudosos e incompletos sin confirmar salen con nombre, correo y teléfono
+vacíos (casilla en pantalla).
+
+**El archivo sale sin formato, para importarlo tal cual.** Antes había que copiar la hoja y pegarla como “solo valores” en otra.
+El motivo: el archivo traía el primer renglón inmovilizado, anchos en las 198 columnas y los textos guardados “en línea”
+(no como los guarda Excel). Ahora se escribe con XlsxWriter sin anchos, sin paneles, sin estilos y con textos compartidos; las
+celdas sin dato quedan realmente vacías (no con un texto en blanco). El BOL numérico va como número y lo demás como texto
+(`R` conserva su espacio inicial, como `RIGHT(N2,5)`).
 
 **Memoria.** Lo confirmado (y los verdes al descargar) se aprende en segundo plano: correo → nombre y teléfonos,
 dominios, y código postal → estado. Sirve para corregir confusiones típicas del OCR (l/i/1, o/0, rn/m) contra algo
@@ -131,24 +141,26 @@ ready** del READY DATE.
 
 ## Cambios V9
 
-**DIMS en lugar de DATA.** Ya no hace falta pegar nada en la hoja DATA. En la pestaña de contactos se sube el DIMS
-que se recibe (`.xlsx`, `.xlsm`, `.xls` o `.csv`). Se lee **por nombre de columna**, así que no importa el orden ni que
-falten `HAZMAT`, `TRACKER` o `RACK` (o que vengan vacías): solo se exige `Barcode`. Con él la app:
+**DIMS opcional, solo para comparar.** En las pestañas de contactos e Inbonds se puede subir el DIMS que se recibe (`.xlsx`,
+`.xlsm`, `.xls` o `.csv`). Se lee **por nombre de columna**: solo se exige `Barcode`, en cualquier orden. Su única función es
+verificar que trae **los mismos BOL y la misma cantidad** que los PDF; no agrega ni cambia nada en el Excel (ni carrier, ni
+HAZMAT, ni READY DATE). Es opcional, porque puede que en ese momento no se tenga: sin DIMS se descarga el DATE directamente.
 
-- compara los BOL del DIMS con los de los PDF y avisa cuáles faltan de un lado y del otro;
-- confirma el carrier de cada BOL;
-- toma el HAZMAT (`DK`) y arma la hoja DATA.
+Si hay diferencias se listan por lado (*solo en PDF* / *solo en DIMS*) y la descarga queda bloqueada hasta que hagas una de
+estas dos cosas: **aceptar** los BOL que no coinciden (uno por uno, en la lista) o marcar **Ignorar la comparación**. Los BOL
+que están solo en los PDF se quedan en el Excel; los que están solo en el DIMS no llevan fila porque no hay PDF. Un DIMS
+ilegible o sin `Barcode` solo muestra el error y no bloquea nada. Como el Excel ya no toma el HAZMAT del DIMS, `DK` sale en `0`.
 
 **Carrier y Shipper Number (`E`).** Se identifica igual que la pestaña 1, por el contenido del PDF: el Ship From
-“IEC TECHNOLOGIES” es BEX (`149570`) y “Foxconn” es VRP (`144463`). Se confirma con la columna `CARRIER` del DIMS y con
-el nombre del archivo; si no coinciden gana la mayoría (en empate, el PDF) y el BOL queda en amarillo con el aviso. Si
+“IEC TECHNOLOGIES” es BEX (`149570`) y “Foxconn” es VRP (`144463`). Se confirma con
+el nombre del archivo; si no coinciden gana el PDF y el BOL queda en amarillo con el aviso. Si
 no se puede saber, se elige a mano en la tarjeta.
 
 **Nombre del archivo.** Campo opcional; si se deja vacío el archivo se guarda con el READY DATE (`11-19-26 1356.xlsx`).
 
 **Mensajes de cut off.** Debajo del READY DATE hay un campo `POD DATE TIME` y tres mensajes listos para copiar, los mismos
 que armaba `DATA!O18:O20`: `LEFT PLANT … ARRIVED AT …`, `LEFT PLANT …` y `ARRIVED AT …` (con casilla opcional para
-agregar el día de la semana, p. ej. `SATURDAY`). También salen en la hoja DATA del Excel (N2, N3:N4 y N18:O20).
+agregar el día de la semana, p. ej. `SATURDAY`). Son solo para copiar y pegar: no van al Excel.
 
 **Pestaña Inbonds.** Lee BOL escaneados o Commercial Invoice (el mismo lector de la pestaña 1), reconoce el estado del
 Ship To y calcula el service level. No lee el contacto. En DATE escribe `INBD` en la columna `FK`

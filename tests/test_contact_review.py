@@ -38,7 +38,38 @@ def test_green_doubt_red():
     assert got["3049901"].status == "ok"
     assert got["3049902"].status == "doubt" and "lowagree:email" in got["3049902"].reasons
     assert got["3049903"].status == "fail" and "missing:phone" in got["3049903"].reasons
-    assert got["3049904"].status == "fail" and "empty_block" in got["3049904"].reasons
+    # Un Ship To Attention vacio es normal: verde, con nombre, correo y telefono en blanco
+    assert got["3049904"].status == "ok" and "empty_block" in got["3049904"].reasons
+    assert (got["3049904"].name, got["3049904"].email, got["3049904"].phone) == ("", "", "")
+    assert not [r for r in got["3049904"].reasons if r.startswith(("missing", "lowagree"))]
+
+
+def _empty_page(no=4, **kwargs):
+    blank = page(no, bol="3049904", name="", email="", phone="", empty=True, **kwargs)
+    for fname in ("name", "email", "phone"):
+        setattr(blank, fname, FieldRead())
+    return blank
+
+
+def test_empty_block_is_green_but_the_state_is_still_required_and_checked():
+    no_state = _empty_page(state="")
+    no_state.state = FieldRead()
+    got = build([no_state])[0]
+    assert got.status == "fail" and "missing:state" in got.reasons  # el service level sale del estado
+    guessed = build([_empty_page(reasons=["state_from_zip"])])[0]
+    assert guessed.status == "doubt" and "state_from_zip" in guessed.reasons  # un estado deducido sigue en amarillo
+
+
+def test_empty_block_survives_a_manual_review_only_while_it_stays_empty():
+    contact = build([_empty_page()])[0]
+    assert contact.status == "ok"
+    again = cr.reclassify(contact, None)  # se abre y se guarda sin escribir nada
+    assert again.status == "ok" and "empty_block" in again.reasons
+
+    again.name = "Jane Testwell"  # ya hay un dato: deja de ser un bloque vacio y falta el resto
+    partial = cr.reclassify(again, None)
+    assert partial.status == "fail" and "empty_block" not in partial.reasons
+    assert "missing:email" in partial.reasons and "missing:phone" in partial.reasons
 
 
 def test_zip_state_mismatch_and_derived_state_are_never_green():
@@ -97,12 +128,11 @@ def test_name_with_digits_or_slash_needs_review():
     assert odd.status == "doubt" and "name_odd" in odd.reasons
 
 
-def test_carrier_is_confirmed_between_pdf_dims_and_file_name():
-    assert cr.resolve_carrier("BEX", "BEX", "BEX") == ("BEX", "")
-    assert cr.resolve_carrier("", "VRP", "VRP") == ("VRP", "")  # basta con que no se contradigan
-    assert cr.resolve_carrier("BEX", "VRP", "VRP") == ("VRP", "carrier_mismatch")  # manda la mayoria
-    assert cr.resolve_carrier("BEX", "VRP", "") == ("BEX", "carrier_mismatch")  # empate: manda el PDF
-    assert cr.resolve_carrier("", "", "") == ("", "carrier_unknown")
+def test_carrier_is_confirmed_between_pdf_and_file_name():
+    assert cr.resolve_carrier("BEX", "BEX") == ("BEX", "")
+    assert cr.resolve_carrier("", "VRP") == ("VRP", "")  # basta con que no se contradigan
+    assert cr.resolve_carrier("BEX", "VRP") == ("BEX", "carrier_mismatch")  # en desacuerdo manda el PDF
+    assert cr.resolve_carrier("", "") == ("", "carrier_unknown")
 
 
 def test_pdf_layout_beats_file_name_and_mismatch_is_flagged_yellow():
@@ -110,9 +140,8 @@ def test_pdf_layout_beats_file_name_and_mismatch_is_flagged_yellow():
     got = build([bex_page])[0]
     assert got.carrier == "BEX" and "carrier_mismatch" in got.reasons and got.status == "doubt"
 
-    # con el DIMS de acuerdo con el PDF ya no hay duda
-    dims = {"3049901": "BEX"}
-    got = cr.build_contacts([PdfRead("x.pdf", [page(1, carrier="BEX")], 1)], None, None, dims)[0]
+    # y si el archivo dice lo mismo que el BOL no hay duda
+    got = cr.build_contacts([PdfRead("BEX_x.pdf", [page(1, carrier="BEX")], 1)])[0]
     assert got.carrier == "BEX" and "carrier_mismatch" not in got.reasons and got.status == "ok"
 
 
@@ -120,5 +149,5 @@ def test_inbond_classification_does_not_need_contact_fields():
     blank = page(1, name="", email="", phone="")
     for fname in ("name", "email", "phone"):
         setattr(blank, fname, FieldRead())
-    got = cr.build_contacts([PdfRead("VRP_x.pdf", [blank], 1)], None, None, None, need_contact=False)[0]
+    got = cr.build_contacts([PdfRead("VRP_x.pdf", [blank], 1)], None, None, need_contact=False)[0]
     assert got.status == "ok" and got.state == "FL"

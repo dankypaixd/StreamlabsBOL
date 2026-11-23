@@ -24,6 +24,7 @@ import contact_review as cr
 import destinations
 import contacts_tab as ct
 import date_export as de
+import dims_compare
 import service_levels as sl
 
 XLSX_MIME = ct.XLSX_MIME
@@ -257,7 +258,7 @@ def read_files(
         except Exception as error:  # PDF danado o ilegible
             errors[name] = str(error)
     if bol_reads:
-        contacts.extend(cr.build_contacts(bol_reads, None, None, None, need_contact=False))
+        contacts.extend(cr.build_contacts(bol_reads, None, None, need_contact=False))
     contacts.sort(key=lambda c: (ct._numeric(c.bol), c.source_file))
     return contacts, kinds, errors
 
@@ -366,6 +367,7 @@ def render(t: Callable[..., str]) -> None:
 
     top = st.container()  # READY DATE, POD y mensajes arriba de todo
     pdf_files = st.file_uploader(t("ib_upload"), type=["pdf"], accept_multiple_files=True, key="ib_pdfs")
+    dims, _ = dims_compare.uploader(t, key="ib_data")  # opcional: solo compara los BOL
     ready, ready_invalid, _ = ct.ready_block(t, top, prefix="ib", ready_key="ib_ready")
     if not pdf_files:
         return
@@ -406,6 +408,7 @@ def render(t: Callable[..., str]) -> None:
     if not contacts:
         return
     st.success(t("ib_done", count=len(contacts)))
+    compared = dims_compare.render_comparison(t, prefix="ib", pdf_bols=[c.bol for c in contacts], dims=dims)
     groups = {key: [c for c in contacts if _status(c) == key] for key in ("fail", "doubt", "ok", "confirmed")}
     columns = st.columns(4)
     for column, (label, key) in zip(
@@ -458,7 +461,7 @@ def render(t: Callable[..., str]) -> None:
     if no_carrier:
         st.warning(t("ct_no_carrier_warn", items=", ".join(no_carrier[:20])))
 
-    blob, results = de.build_workbook(shipments, ready, None, include_data=False, priority=de.PRIORITY_INBOND)
+    blob, results = de.build_workbook(shipments, ready, priority=de.PRIORITY_INBOND)
     st.caption(t("ib_priority_note") + " " + t("ct_row_count", count=len(results)))
     st.dataframe(pd.DataFrame([{
         t("ct_col_bol"): r.values["B"], "Carrier": next((s.carrier for s in shipments if s.bol == r.bol), ""),
@@ -470,6 +473,9 @@ def render(t: Callable[..., str]) -> None:
     name_input = st.text_input(t("ct_filename"), key="ib_filename", help=t("ct_filename_help"), placeholder=ready or "DATE_IMPORT")
     file_name = de.safe_filename(name_input, ready)
     st.caption(t("ct_download_name", name=file_name))
+    if not compared:
+        st.info(t("dc_pending_download"))
     st.download_button(
         t("ib_download"), data=blob, file_name=file_name, mime=XLSX_MIME, width="stretch", key="ib_dl", type="primary",
+        disabled=not compared,
     )

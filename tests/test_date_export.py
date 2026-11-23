@@ -45,29 +45,25 @@ def _dims_xlsx(headers, rows, sheet="VRP 53458"):
     return buffer.getvalue()
 
 
-def test_dims_reads_by_header_with_any_column_set():
-    # con TRACKER y HAZMAT vacio (como el archivo recibido)
+def test_dims_reads_only_the_barcodes_by_header_in_any_column_order():
+    # con TRACKER y HAZMAT (como el archivo recibido): solo importa Barcode, una caja por renglon
     full = _dims_xlsx(
         ["CARRIER", "TRAILER", "Barcode", "Length", "Width", "Height", "TRACKER", "Actual Weight", "BOX", "RACK", "HAZMAT", "Scanned Time"],
         [["VRP ", 53458, 3049264, 51, 36, 86, "j1514571", 1000, 1, None, None, "Nov 20 2026"],
          ["VRP ", 53458, 3049264, 51, 36, 86, "j1513918", 1000, 1, None, None, "Nov 20 2026"],
-         ["VRP ", 53458, 3049280, 49.8, 42.3, 15.3, None, 100, 1, None, "Y", "Nov 20 2026"]],
+         ["VRP ", 53458, 3049280.0, 49.8, 42.3, 15.3, None, 100, 1, None, "Y", "Nov 20 2026"],
+         [None, None, None, 1, 1, 1, None, 1, 1, None, None, None]],  # sin barcode: no es una caja
     )
     dims = de.read_dims(full, "dims.xlsx")
-    assert dims.barcodes == ["3049264", "3049280"] and dims.carriers == {"3049264": "VRP", "3049280": "VRP"}
-    assert dims.hazmat == {"3049280": True} and dims.trackers["3049264"] == ["j1514571", "j1513918"]
-    assert dims.rows[0]["weight"] == 1000 and dims.missing == []
+    assert dims.barcodes == ["3049264", "3049280"]
+    assert dims.boxes == {"3049264": 2, "3049280": 1} and dims.sheet_name == "VRP 53458"
 
-    # sin HAZMAT ni TRACKER ni RACK y con las columnas en otro orden (como el template)
-    short = _dims_xlsx(["Barcode", "CARRIER", "Length", "Width", "Height", "Actual Weight", "BOX"],
-                       [[98162916, "BEX", 48, 40, 40, 107, 2]], sheet="DATA")
-    dims = de.read_dims(short, "x.xlsx")
-    assert dims.barcodes == ["98162916"] and dims.carriers == {"98162916": "BEX"}
-    assert dims.hazmat == {} and sorted(dims.missing) == ["hazmat", "tracker"]
+    # sin las demas columnas y con Barcode primero (como el template)
+    short = _dims_xlsx(["Barcode", "CARRIER", "Length"], [[98162916, "BEX", 48]], sheet="DATA")
+    assert de.read_dims(short, "x.xlsx").barcodes == ["98162916"]
 
     csv = b"CARRIER,Barcode,HAZMAT\nBEX,98162916,\nBEX,98162932,YES\n"
-    dims = de.read_dims(csv, "dims.csv")
-    assert dims.hazmat == {"98162932": True}
+    assert de.read_dims(csv, "dims.csv").barcodes == ["98162916", "98162932"]
 
 
 def test_dims_without_barcode_is_rejected():
@@ -77,26 +73,52 @@ def test_dims_without_barcode_is_rejected():
         de.read_dims(_dims_xlsx(["CARRIER", "Length"], [["BEX", 1]]), "x.xlsx")
 
 
-def test_full_workbook_builds_data_from_dims_in_template_order():
-    dims = de.read_dims(
-        _dims_xlsx(
-            ["CARRIER", "TRAILER", "Barcode", "Length", "Width", "Height", "TRACKER", "Actual Weight", "BOX", "RACK", "HAZMAT", "Scanned Time"],
-            [["VRP ", 53458, 3049901, 48, 40, 40, "j1", 100, 1, None, None, "Nov 19 2026"]],
-        ),
-        "d.xlsx",
-    )
-    extras = {"pod": "11/19/26 20:54", **de.cutoff_messages("11/19/26 1356", "11/19/26 20:54")}
-    blob, _ = de.build_workbook(_rows()[:1], "11/19/26 1356", dims, extras=extras)
-    book = load_workbook(io.BytesIO(blob))
-    assert book.sheetnames == ["DATE", "DATA"]
-    data = book["DATA"]
-    assert [data.cell(1, c).value for c in (1, 3, 7, 14, 17, 18)] == [
-        "CARRIER", "Barcode", "Actual Weight", "READY DATE", "SERVICE LEVEL", "DELIVERY DATE"]
-    assert data["G2"].value == 100  # el peso va en G aunque el DIMS traiga TRACKER antes
-    assert data["S1"].value == "TRACKER" and data["S2"].value == "j1"
-    assert (data["Q2"].value, data["R2"].value) == ("3D", None)  # service level si; DELIVERY DATE vacia
-    assert data["N2"].value == "11/19/26 1356" and data["N3"].value == "POD DATE TIME" and data["N4"].value == "11/19/26 20:54"
-    assert data["O18"].value == "LEFT PLANT 11/19/26 1356 ARRIVED AT 11/19/26 20:54"
+def test_the_workbook_only_has_the_date_sheet_and_no_dims_data():
+    assert not hasattr(de, "_write_data_sheet") and not hasattr(de, "DATA_LAYOUT")
+    blob, _ = de.build_workbook(_rows()[:1], "11/19/26 1356")
+    assert load_workbook(io.BytesIO(blob)).sheetnames == ["DATE"]
+
+
+def test_date_sheet_has_no_formatting_so_it_imports_as_is():
+    """Lo que obligaba a copiar la hoja y pegar "solo valores": paneles, anchos, cadenas en linea y estilos."""
+    import re
+    import zipfile
+
+    ready = "11/19/26 1356"
+    blob, _ = de.build_workbook(_rows(), ready, priority=de.PRIORITY_INBOND)
+    archive = zipfile.ZipFile(io.BytesIO(blob))
+    sheet_xml = archive.read("xl/worksheets/sheet1.xml").decode()
+    assert "<cols>" not in sheet_xml  # sin anchos de columna
+    assert "<pane" not in sheet_xml and "<selection" not in sheet_xml  # sin paneles inmovilizados
+    assert "inlineStr" not in sheet_xml and "<f>" not in sheet_xml  # cadenas compartidas como en Excel, sin formulas
+    assert not re.search(r'<c [^>]*\bs="[1-9]', sheet_xml)  # ninguna celda con estilo propio
+    assert not re.search(r"<(mergeCell|conditionalFormatting|dataValidation|autoFilter|tableParts|legacyDrawing|drawing)", sheet_xml)
+    assert "xl/sharedStrings.xml" in archive.namelist()
+    styles = archive.read("xl/styles.xml").decode()
+    assert 'cellXfs count="1"' in styles  # solo el estilo por defecto
+
+    sheet = load_workbook(io.BytesIO(blob))["DATE"]
+    assert sheet.freeze_panes is None and len(sheet.column_dimensions) == 0
+    assert all(cell.style_id == 0 for row in sheet.iter_rows() for cell in row)
+
+
+def test_date_blank_values_are_really_empty_cells_and_types_are_kept():
+    import re
+    import zipfile
+
+    blob, _ = de.build_workbook(_rows(), "11/19/26 1356")
+    xml = zipfile.ZipFile(io.BytesIO(blob)).read("xl/worksheets/sheet1.xml").decode()
+    written = re.findall(r'<c r="([A-Z]+)(\d+)"', xml)
+    third_row = {col for col, row in written if row == "4"}  # BOL sin datos ni estado
+    assert third_row == {"A", "B", "E", "Q", "R", "S", "CO", "DJ", "DK"}  # nada de AB, AC, AK, DU, T, FK en ""
+    sheet = load_workbook(io.BytesIO(blob))["DATE"]
+    assert isinstance(sheet["B2"].value, int) and sheet["B2"].value == 3049901  # el BOL numerico es numero
+    assert sheet["E2"].value == "144463" and sheet["R2"].value == " 1356"  # el resto son textos (R con su espacio)
+    assert sheet["T2"].value is None and sheet["FK2"].value is None
+    # sin tocar nada: ni numeros convertidos ni textos que parezcan formulas o ligas
+    odd, _ = de.build_workbook([de.ShipmentRow("3049901", name="=A1", state="TX", carrier="VRP")], "")
+    cell = load_workbook(io.BytesIO(odd))["DATE"]["AB2"]
+    assert cell.value == "=A1" and cell.data_type == "s"
 
 
 def test_cutoff_messages_like_the_template():
@@ -139,29 +161,21 @@ def test_consignee_number_goes_in_column_t_only_when_given():
         de.ShipmentRow("3049902", state="FL", carrier="BEX", consignee="210475"),
         de.ShipmentRow("3049903", state="TX", carrier="VRP"),
     ]
-    blob, _ = de.build_workbook(rows, "11/19/26 1356", None, include_data=False)
+    blob, _ = de.build_workbook(rows, "11/19/26 1356")
     sheet = load_workbook(io.BytesIO(blob))["DATE"]
     assert [sheet[f"T{n}"].value for n in (2, 3, 4)] == ["147229", "210475", None]
 
 
 def test_delivery_is_never_written_but_ready_date_is_in_every_workbook():
     ready = "11/19/26 1356"
-    dims = de.read_dims(
-        _dims_xlsx(["CARRIER", "Barcode", "Length", "Width", "Height", "Actual Weight"], [["VRP", 3049901, 10, 10, 10, 100]]),
-        "d.xlsx",
-    )
     rows = _rows()[:1]
-    full, results = de.build_workbook(rows, ready, dims, include_data=True)
-    date_only, _ = de.build_workbook(rows, ready, dims, include_data=False)
-    inbond, _ = de.build_workbook(rows, ready, None, include_data=False, priority=de.PRIORITY_INBOND)
+    plain, results = de.build_workbook(rows, ready)
+    inbond, _ = de.build_workbook(rows, ready, priority=de.PRIORITY_INBOND)
     assert results[0].delivery == "11/24/26"  # se calcula para mostrarla en pantalla
-    for blob in (full, date_only, inbond):
+    for blob in (plain, inbond):
         sheet = load_workbook(io.BytesIO(blob))["DATE"]
         # READY DATE: Pickup Date / Time / Close Time en todos los libros
         assert (sheet["Q2"].value, sheet["R2"].value, sheet["S2"].value) == ("11/19/26", " 1356", "1700")
         # Scheduled Delivery Date / Time (AF, AG): vacias; el service level (AK) se conserva
         assert (sheet["AF1"].value, sheet["AG1"].value) == ("Scheduled Delivery Date", "Scheduled Delivery Time")
         assert (sheet["AF2"].value, sheet["AG2"].value, sheet["AK2"].value) == (None, None, "3D")
-    data = load_workbook(io.BytesIO(full))["DATA"]
-    assert data["N2"].value == ready and data["Q2"].value == "3D" and data["R2"].value is None
-    assert "DELIVERY DATE" in [c.value for c in data[1]]  # el encabezado se queda para no mover columnas

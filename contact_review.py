@@ -64,7 +64,7 @@ class Contact:
     source_file: str
     pages: list[int]
     carrier: str = ""  # resultado final (confirmado entre las fuentes de abajo)
-    carrier_sources: dict[str, str] = field(default_factory=dict)  # pdf / dims / file -> BEX|VRP
+    carrier_sources: dict[str, str] = field(default_factory=dict)  # pdf / file -> BEX|VRP
     name: str = ""
     email: str = ""
     phone: str = ""
@@ -93,31 +93,24 @@ def carrier_from_filename(filename: str) -> str:
     return ""
 
 
-def resolve_carrier(pdf: str = "", dims: str = "", file: str = "") -> tuple[str, str]:
+def resolve_carrier(pdf: str = "", file: str = "") -> tuple[str, str]:
     """Carrier final y motivo de duda ("" si todo coincide).
 
-    Se identifica por el contenido del PDF (Ship From, como la pestana 1) y se confirma con la
-    columna CARRIER del DIMS y con el nombre del archivo. Si no coinciden manda la mayoria y,
-    en empate, lo que dice el propio BOL; en ese caso se marca para revisar.
+    Se identifica por el contenido del PDF (Ship From, como la pestana 1) y se confirma con el
+    nombre del archivo. Si no coinciden manda lo que dice el propio BOL; en ese caso se marca para revisar.
     """
-    sources = {"pdf": pdf, "dims": dims, "file": file}
-    found = {k: v for k, v in sources.items() if v in ("BEX", "VRP")}
+    found = {k: v for k, v in {"pdf": pdf, "file": file}.items() if v in ("BEX", "VRP")}
     if not found:
         return "", "carrier_unknown"
-    values = list(found.values())
-    if len(set(values)) == 1:
-        return values[0], ""
-    ranking = sorted(set(values), key=lambda c: (-values.count(c), "pdf" not in found or found["pdf"] != c))
-    return ranking[0], "carrier_mismatch"
+    if len(set(found.values())) == 1:
+        return next(iter(found.values())), ""
+    return found.get("pdf") or found["file"], "carrier_mismatch"
 
 
-def set_carrier(contact: "Contact", dims: str = "") -> None:
+def set_carrier(contact: "Contact") -> None:
     """Calcula contact.carrier con todas las fuentes y deja (o quita) la bandera de duda."""
-    sources = dict(contact.carrier_sources)
-    if dims:
-        sources["dims"] = dims
-    contact.carrier_sources = sources
-    carrier, reason = resolve_carrier(sources.get("pdf", ""), sources.get("dims", ""), sources.get("file", ""))
+    sources = contact.carrier_sources
+    carrier, reason = resolve_carrier(sources.get("pdf", ""), sources.get("file", ""))
     contact.carrier = carrier
     contact.reasons = [r for r in contact.reasons if not r.startswith("carrier_")]
     if reason:
@@ -337,15 +330,17 @@ def classify(
     Con ``need_contact=False`` (pestana Inbonds) no se exige nombre, correo ni telefono.
     """
     hard: list[str] = []
-    if need_contact and "empty_block" in contact.reasons:
-        hard.append("empty_block")
+    # Un Ship To Attention vacio en el PDF es normal: queda en verde y el Excel lleva nombre, correo y
+    # telefono en blanco. Si ya trae algun dato (memoria o captura a mano), deja de ser un bloque vacio.
+    empty = "empty_block" in contact.reasons and not (contact.name or contact.email or contact.phone)
+    if not empty:
+        contact.reasons = [r for r in contact.reasons if r != "empty_block"]
     if not contact.bol or contact.key.startswith("?"):
         hard.append("missing:bol")
-    for fname in (("name", "email", "phone") if need_contact else ()):
+    for fname in (("name", "email", "phone") if need_contact and not empty else ()):
         value = getattr(contact, fname)
         if not value:
-            if "empty_block" not in contact.reasons:
-                hard.append(f"missing:{fname}")
+            hard.append(f"missing:{fname}")
         elif not {"name": valid_name, "email": valid_email, "phone": valid_phone}[fname](value):
             hard.append(f"invalid:{fname}")
     if not contact.state:
@@ -378,11 +373,11 @@ def classify(
         thresholds = (
             ("name", AGREE_NAME), ("email", AGREE_EMAIL), ("phone", AGREE_PHONE),
             ("state", AGREE_STATE), ("bol", AGREE_BOL), ("phone_prefix", SUPPORT_PHONE_PREFIX),
-        ) if need_contact else (("state", AGREE_STATE), ("bol", AGREE_BOL))
+        ) if need_contact and not empty else (("state", AGREE_STATE), ("bol", AGREE_BOL))
         for fname, limit in thresholds:
             if contact.agreement.get(fname, 0.0) < limit:
                 soft.append(f"lowagree:{fname}")
-    informational = {"bol_not_in_data", "bol_not_in_dims", "destination_mexico", "destination_latam"}
+    informational = {"bol_not_in_data", "bol_not_in_dims", "destination_mexico", "destination_latam", "empty_block"}
     flags = [r for r in contact.reasons if r not in informational and not r.startswith("memory_exact")]
     if memory_exact:
         # La coincidencia exacta con memoria absorbe dudas del OCR, no las de BOL/estado.
@@ -416,18 +411,15 @@ def build_contacts(
     pdfs: Iterable[PdfRead],
     memory: Memory | None = None,
     data_barcodes: set[str] | None = None,
-    dims_carriers: dict[str, str] | None = None,
     need_contact: bool = True,
 ) -> list[Contact]:
-    """Une paginas, aplica memoria, compara con el DIMS (BOL y carrier) y clasifica."""
+    """Une paginas, aplica memoria, ajusta el BOL contra el DIMS (si hay) y clasifica."""
     contacts = merge_pages(pdfs)
     for contact in contacts:
         if need_contact:
             apply_memory(contact, memory)
         if data_barcodes:
             snap_to_data(contact, data_barcodes)
-        if dims_carriers is not None:
-            set_carrier(contact, dims_carriers.get(contact.bol, ""))
         classify(contact, memory, need_contact=need_contact)
     return contacts
 
@@ -440,6 +432,7 @@ def reclassify(contact: Contact, memory: Memory | None = None, need_contact: boo
     contact.reasons = [
         r for r in contact.reasons
         if r.startswith(("memory_fix", "bol_not_in_data", "carrier_"))
+        or r == "empty_block"  # classify lo quita si ya se escribio algun dato
         # La nota de destino solo sigue valiendo si el estado no se cambio a mano.
         or (r in destination and normalize_state(contact.state) == destination[r])
     ]

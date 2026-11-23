@@ -1,11 +1,12 @@
-"""Genera el Excel de importacion igual que el template (hojas DATE y DATA).
+"""Genera el Excel de importacion (hoja DATE) y lee el DIMS para compararlo contra los BOL.
 
-En el template, lo que se pega en DATA se refleja por formulas en DATE. Aqui se escriben
-los valores ya calculados (sin formulas dinamicas) para que el archivo se importe tal cual.
+Solo se descarga la hoja DATE, con los valores ya calculados (sin formulas) y SIN formato: ni anchos de
+columna, ni paneles inmovilizados, ni estilos, y las celdas vacias quedan realmente vacias. Asi se importa
+tal cual; con el formato de antes habia que copiar la hoja y pegarla como "solo valores".
 
 Columnas de DATE que se llenan (el resto queda vacio, como en el template):
     A  Handling Station        "DFW" cuando hay Housebill
-    B  Housebill               BOL (Barcode de DATA)
+    B  Housebill               BOL
     E  Shipper Number          BEX -> 149570, VRP -> 144463
     Q  Pickup Date             primeros 8 caracteres del READY DATE (MM/DD/YY)
     R  Pickup Time             ultimos 5 caracteres del READY DATE (como RIGHT(N2,5))
@@ -17,16 +18,15 @@ Columnas de DATE que se llenan (el resto queda vacio, como en el template):
     AK Service                 "3D", "4D"...     (segun el estado del Ship To)
     CO Product Code            "HPDOM"
     DJ BilltoRefType           "RAX"
-    DK BilltoRef               "1" si algun renglon del BOL en DATA tiene HAZMAT = Y, si no "0"
+    DK BilltoRef               "1" si el BOL es HAZMAT, si no "0"
     DU Consignee Email         correo            <- Ship To Attention
     FK Priority Code           "INBD" (solo pestana Inbonds)
 
-La fecha y hora de entrega (Scheduled Delivery Date / Time, AF y AG de DATE, y DELIVERY DATE de DATA) NO se escriben en
-ningun Excel: no se usan para importar. La entrega solo se calcula para mostrarla en pantalla (DateResult.delivery).
+La fecha y hora de entrega (Scheduled Delivery Date / Time, AF y AG de DATE) NO se escriben en ningun
+Excel: no se usan para importar. La entrega solo se calcula para mostrarla (DateResult.delivery).
 
-El DATA del libro se arma con el DIMS que sube el usuario (cualquier orden de columnas, con o sin
-TRACKER / HAZMAT / RACK) en el orden del template; se rellenan N2 (READY DATE), N3:N4 (POD DATE TIME)
-y Q (SERVICE LEVEL) en cada renglon del BOL. DELIVERY DATE (R) queda vacia.
+El DIMS ya no aporta datos al Excel: solo se lee su columna Barcode para verificar que trae los mismos BOL
+que los PDF (ver dims_compare.py).
 """
 from __future__ import annotations
 
@@ -36,10 +36,11 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable
 
-from openpyxl import Workbook, load_workbook
-from openpyxl.utils import column_index_from_string, get_column_letter
+import xlsxwriter
+from openpyxl import load_workbook
+from openpyxl.utils import column_index_from_string
 
 from service_levels import delivery_text, parse_ready, service_label
 
@@ -53,21 +54,8 @@ BILLTO_REF_TYPE = "RAX"
 
 PRIORITY_INBOND = "INBD"
 
-# Orden de las columnas de DATA en el template. TRACKER no existe en el template: va al final (S).
-DATA_LAYOUT = [
-    ("carrier", "A"), ("trailer", "B"), ("barcode", "C"), ("length", "D"), ("width", "E"), ("height", "F"),
-    ("weight", "G"), ("box", "H"), ("rack", "I"), ("hazmat", "J"), ("scanned", "K"), ("time_in", "L"),
-    ("time_out", "M"), ("ready", "N"), ("service", "Q"), ("delivery", "R"), ("tracker", "S"),
-]
-# Encabezados del DIMS (sin importar mayusculas, espacios ni signos) -> campo
-DIMS_HEADERS = {
-    "carrier": "carrier", "trailer": "trailer", "barcode": "barcode", "length": "length", "width": "width",
-    "height": "height", "tracker": "tracker", "tracking": "tracker", "trackingno": "tracker",
-    "actualweight": "weight", "weight": "weight", "box": "box", "boxes": "box", "rack": "rack",
-    "hazmat": "hazmat", "scannedtime": "scanned", "timein": "time_in", "timeout": "time_out",
-    "readydate": "ready",
-}
-YES_VALUES = {"Y", "YES", "SI", "SÍ", "X", "1", "TRUE", "HAZMAT"}
+# Unico encabezado del DIMS que se usa (sin importar mayusculas, espacios ni signos)
+BARCODE_HEADER = "barcode"
 
 
 def load_headers() -> dict[str, list[str]]:
@@ -87,34 +75,15 @@ def format_ready(value: str | datetime | None) -> str:
 
 @dataclass
 class DimsSheet:
-    """Las dimensiones que se reciben (DIMS), leidas por nombre de columna.
+    """Los BOL (columna Barcode) del DIMS que se recibe, solo para compararlos contra los PDF.
 
-    Los archivos llegan con mas o menos columnas (TRACKER, HAZMAT, RACK a veces estan y a veces
-    no), asi que nunca se usa la posicion: solo se exige Barcode.
+    Los archivos llegan con mas o menos columnas y en cualquier orden, asi que nunca se usa la posicion:
+    solo se exige el encabezado Barcode. Una caja por renglon, asi que un BOL puede repetirse.
     """
 
-    rows: list[dict[str, object]]  # un dict por renglon (campos de DIMS_HEADERS)
-    found: list[str] = field(default_factory=list)  # campos que traia el archivo
-    ready: str = ""  # READY DATE, solo si el archivo trae esa columna
-    carriers: dict[str, str] = field(default_factory=dict)  # barcode -> BEX/VRP
-    hazmat: dict[str, bool] = field(default_factory=dict)  # barcode -> hay HAZMAT
-    trackers: dict[str, list[str]] = field(default_factory=dict)  # barcode -> trackers
+    barcodes: list[str]  # BOL unicos, en el orden en que aparecen
+    boxes: dict[str, int] = field(default_factory=dict)  # BOL -> renglones (cajas) en el DIMS
     sheet_name: str = "DIMS"
-
-    @property
-    def barcodes(self) -> list[str]:
-        seen: dict[str, None] = {}
-        for row in self.rows:
-            seen.setdefault(barcode_text(row.get("barcode")), None)
-        return list(seen)
-
-    @property
-    def missing(self) -> list[str]:
-        """Campos opcionales que este archivo no traia (solo informativo)."""
-        return [name for name in ("carrier", "hazmat", "tracker") if name not in self.found]
-
-
-DataSheet = DimsSheet  # nombre anterior
 
 
 def barcode_text(value: object) -> str:
@@ -175,37 +144,14 @@ def read_dims(content: bytes, filename: str = "DIMS.xlsx") -> DimsSheet:
     header_at = _header_row(grid)
     if header_at is None:
         raise ValueError("barcode_header")
+    position = next(i for i, cell in enumerate(grid[header_at]) if _norm(cell) == BARCODE_HEADER)
 
-    columns: dict[str, int] = {}
-    for position, cell in enumerate(grid[header_at]):
-        key = DIMS_HEADERS.get(_norm(cell))
-        if key and key not in columns:  # si un encabezado se repite, vale el primero
-            columns[key] = position
-
-    rows: list[dict[str, object]] = []
+    boxes: dict[str, int] = {}
     for raw in grid[header_at + 1:]:
-        row = {key: _clean(raw[pos]) if pos < len(raw) else None for key, pos in columns.items()}
-        if row.get("barcode") is None:
-            continue  # sin barcode no es una caja
-        rows.append(row)
-
-    dims = DimsSheet(rows=rows, found=list(columns), sheet_name=sheet_name)
-    first_ready = next((r["ready"] for r in rows if r.get("ready")), None)
-    dims.ready = format_ready(first_ready) if first_ready else ""
-    for row in rows:
-        code = barcode_text(row["barcode"])
-        carrier = str(row.get("carrier") or "").strip().upper()
-        if carrier and code not in dims.carriers:
-            dims.carriers[code] = carrier
-        if str(row.get("hazmat") or "").strip().upper() in YES_VALUES:
-            dims.hazmat[code] = True
-        tracker = str(row.get("tracker") or "").strip()
-        if tracker:
-            dims.trackers.setdefault(code, []).append(tracker)
-    return dims
-
-
-read_data_sheet = read_dims  # nombre anterior
+        code = barcode_text(_clean(raw[position]) if position < len(raw) else None)
+        if code:  # sin barcode no es una caja
+            boxes[code] = boxes.get(code, 0) + 1
+    return DimsSheet(barcodes=list(boxes), boxes=boxes, sheet_name=sheet_name)
 
 
 # ------------------------------------------------------------------ DATE
@@ -277,75 +223,34 @@ def carrier_from_name(filename: str) -> str:
 
 
 def _write_date_sheet(ws, results: Iterable[DateResult]) -> None:
+    """Escribe DATE sin ningun formato: sin anchos, sin paneles y sin celdas vacias con texto ''."""
     headers = load_headers()["DATE"]
-    ws.append(headers)
-    width = len(headers)
-    for result in results:
-        line: list[object] = [None] * width
+    for column, header in enumerate(headers):
+        ws.write_string(0, column, header)
+    for row_no, result in enumerate(results, start=1):
         for letter, value in result.values.items():
             if value in ("", None):
-                continue
-            line[column_index_from_string(letter) - 1] = value
-        ws.append(line)
-    ws.freeze_panes = "A2"
-    for index in range(1, width + 1):
-        ws.column_dimensions[get_column_letter(index)].width = 14
-    for letter in ("AB", "AC", "DU"):
-        ws.column_dimensions[letter].width = 30
-
-
-def _write_data_sheet(ws, dims: DimsSheet, results: Mapping[str, DateResult], ready: str, extras: Mapping[str, str]) -> None:
-    """DATA con el orden del template, mas READY DATE, POD DATE TIME y los mensajes de cut off."""
-    headers = list(load_headers()["DATA"]) + ["TRACKER"]
-    ws.append(headers)
-    letter_of = dict(DATA_LAYOUT)
-    width = len(headers)
-    for number, row in enumerate(dims.rows, start=2):
-        line: list[object] = [None] * width
-        for key, letter in DATA_LAYOUT:
-            if key in ("ready", "service", "delivery"):
-                continue
-            value = row.get(key)
-            if value is not None:
-                line[column_index_from_string(letter) - 1] = value
-        result = results.get(barcode_text(row.get("barcode")))
-        if result:
-            line[column_index_from_string(letter_of["service"]) - 1] = result.service or None
-        ws.append(line)
-    ws["N2"] = ready or None
-    if extras.get("pod"):
-        ws["N3"] = "POD DATE TIME"
-        ws["N4"] = extras["pod"]
-    row_no = 18
-    for label in ("both", "left", "arrived"):
-        if extras.get(label):
-            ws[f"N{row_no}"] = "CUT OFF MESSAGE"
-            ws[f"O{row_no}"] = extras[label]
-            row_no += 1
-    ws.freeze_panes = "A2"
-    for index in range(1, width + 1):
-        ws.column_dimensions[get_column_letter(index)].width = 14
-    ws.column_dimensions["O"].width = 48
+                continue  # la celda queda vacia (no se escribe)
+            column = column_index_from_string(letter) - 1
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                ws.write_number(row_no, column, value)
+            else:
+                ws.write_string(row_no, column, str(value))
 
 
 def build_workbook(
     shipments: Iterable[ShipmentRow],
     ready: str,
-    dims: DimsSheet | None = None,
-    include_data: bool = True,
     priority: str = "",
-    extras: Mapping[str, str] | None = None,
 ) -> tuple[bytes, list[DateResult]]:
-    """Devuelve (xlsx, resultados). Con `dims` e `include_data`, el libro trae DATE y DATA."""
+    """Devuelve (xlsx, resultados): un libro con la sola hoja DATE, sin formato."""
     results = [build_date_row(row, ready, priority) for row in shipments]
-    book = Workbook()
-    date_ws = book.active
-    date_ws.title = "DATE"
-    _write_date_sheet(date_ws, results)
-    if dims is not None and include_data:
-        _write_data_sheet(book.create_sheet("DATA"), dims, {r.bol: r for r in results}, ready, extras or {})
     buffer = io.BytesIO()
-    book.save(buffer)
+    book = xlsxwriter.Workbook(
+        buffer, {"in_memory": True, "strings_to_numbers": False, "strings_to_formulas": False, "strings_to_urls": False}
+    )
+    _write_date_sheet(book.add_worksheet("DATE"), results)
+    book.close()
     return buffer.getvalue(), results
 
 

@@ -14,6 +14,7 @@ def _app():
     import streamlit as st
 
     import contacts_tab
+    import dims_compare
     from tests.test_contacts_ui import PDF
 
     class Upload:
@@ -35,8 +36,8 @@ def _app():
         st.session_state.language = "es"
 
     def t(key, **values):
-        text = contacts_tab.TEXT[st.session_state.language][key]
-        return text.format(**values) if values else text
+        texts = {**contacts_tab.TEXT[st.session_state.language], **dims_compare.TEXT[st.session_state.language]}
+        return texts[key].format(**values) if values else texts[key]
 
     contacts_tab.render(t)
 
@@ -52,14 +53,16 @@ def test_read_confirm_and_export(monkeypatch, tmp_path):
     at.run()
     assert not at.exception
 
-    at.text_input(key="ct_ready_nodata").set_value("11/19/26 1356").run()
+    at.text_input(key="ct_ready").set_value("11/19/26 1356").run()
     at.button(key="ct_read_btn").click().run()
     assert not at.exception
     metrics = {m.label: m.value for m in at.metric}
-    assert metrics["🟢 Sin error"] == "2" and metrics["🔴 Incompletos"] == "1"
+    # El bloque Ship To Attention vacio (BOL 3049903) ya no sale en rojo; solo queda en amarillo porque su
+    # estado se dedujo del ZIP
+    assert metrics["🟢 Sin error"] == "2" and metrics["🔴 Incompletos"] == "0" and metrics["🟡 Dudosos"] == "1"
 
-    # El incompleto (bloque vacio) se confirma a mano: el estado sale del ZIP y el service level se calcula
-    at.button(key="fail_3049903_ok").click().run()
+    # El de bloque vacio se confirma a mano: el estado sale del ZIP y el service level se calcula
+    at.button(key="doubt_3049903_ok").click().run()
     assert not at.exception
     assert {m.label: m.value for m in at.metric}["✔ Confirmados"] == "1"
 
@@ -73,7 +76,7 @@ def test_read_confirm_and_export(monkeypatch, tmp_path):
     assert saved.exists()  # aprendio en segundo plano
 
 
-def _dims_bytes():
+def _dims_bytes(codes=("3049901", "3049902", "3049999")):
     import io
 
     from openpyxl import Workbook
@@ -81,14 +84,18 @@ def _dims_bytes():
     book = Workbook()
     ws = book.active
     ws.append(["CARRIER", "TRAILER", "Barcode", "Length", "Width", "Height", "TRACKER", "Actual Weight", "BOX", "HAZMAT"])
-    for code, hazmat in (("3049901", None), ("3049902", "Y"), ("3049999", None)):
-        ws.append(["VRP ", 53458, int(code), 48, 40, 40, "j123", 100, 1, hazmat])
+    for code in codes:
+        ws.append(["VRP ", 53458, int(code), 48, 40, 40, "j123", 100, 1, None])
     buffer = io.BytesIO()
     book.save(buffer)
     return buffer.getvalue()
 
 
-def test_dims_comparison_carrier_messages_and_file_name(monkeypatch, tmp_path):
+def _download_buttons(at):
+    return [el for el in at.main if el.type == "download_button"]
+
+
+def _read_with_dims(monkeypatch, tmp_path, dims=None):
     from streamlit.testing.v1 import AppTest
 
     import contacts_tab
@@ -96,26 +103,81 @@ def test_dims_comparison_carrier_messages_and_file_name(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     contacts_tab.get_memory.clear()
     at = AppTest.from_function(_app, default_timeout=120)
-    at.session_state["_dims"] = _dims_bytes()
+    if dims is not None:
+        at.session_state["_dims"] = dims
     at.run()
     assert not at.exception
     ready = next(w for w in at.text_input if w.label.startswith("READY DATE"))
     ready.set_value("11/19/26 1356").run()
-    pod = next(w for w in at.text_input if w.label.startswith("POD DATE TIME"))
-    pod.set_value("11/19/26 20:54").run()
-    assert "LEFT PLANT 11/19/26 1356 ARRIVED AT 11/19/26 20:54" in [c.value for c in at.code]
-
     at.button(key="ct_read_btn").click().run()
     assert not at.exception
+    return at
+
+
+def test_dims_is_optional_and_without_it_the_date_downloads(monkeypatch, tmp_path):
+    at = _read_with_dims(monkeypatch, tmp_path)
+    (button,) = _download_buttons(at)
+    assert not button.proto.disabled and button.proto.label == "Descargar la hoja DATE"  # solo la hoja DATE
+    assert not any("DIMS" in w.value for w in at.warning)  # sin DIMS no hay nada que comparar ni que avisar
+
+
+def test_dims_that_matches_shows_ok_and_does_not_block(monkeypatch, tmp_path):
+    same = _dims_bytes(("3049901", "3049902", "3049903"))
+    at = _read_with_dims(monkeypatch, tmp_path, same)
+    assert any("Los 3 BOL de los PDF son los mismos que los del DIMS" in s.value for s in at.success)
+    assert not at.multiselect and not [c for c in at.checkbox if c.label == "Ignorar la comparación"]
+    assert not _download_buttons(at)[0].proto.disabled
+
+
+def test_dims_differences_block_the_download_until_accepted_or_ignored(monkeypatch, tmp_path):
+    at = _read_with_dims(monkeypatch, tmp_path, _dims_bytes())  # el DIMS trae 3049999 y no trae 3049903
     warnings = " | ".join(w.value for w in at.warning)
-    assert "3049999" in warnings and "3049903" in warnings  # el DIMS y los PDF no son iguales
+    assert "PDF 3" in warnings and "DIMS 3" in warnings
+    markdown = " | ".join(m.value for m in at.markdown)
+    assert "3049903" in markdown and "3049999" in markdown  # cada diferencia, en su lista
     name = next(w for w in at.text_input if w.label.startswith("Nombre del archivo"))
     assert name.placeholder == "11/19/26 1356"  # sin nombre se guarda con el READY DATE
     assert any("11-19-26 1356.xlsx" in c.value for c in at.caption)
 
+    # Sin resolver: la descarga queda deshabilitada y se dice por que
+    assert _download_buttons(at)[0].proto.disabled
+    assert any("acepta los BOL que no coinciden" in i.value for i in at.info)
 
-def _download_buttons(at):
-    return [el for el in at.main if el.type == "download_button"]
+    # Aceptar uno solo no alcanza
+    picker = at.multiselect[0]
+    assert picker.options == ["3049903 · solo en PDF", "3049999 · solo en DIMS"]  # dice de que lado esta cada uno
+    picker.select("3049903 · solo en PDF").run()
+    assert _download_buttons(at)[0].proto.disabled
+    assert any("Faltan 1 BOL" in i.value for i in at.info)
+
+    # Aceptar las dos diferencias habilita la descarga
+    at.multiselect[0].select("3049999 · solo en DIMS").run()
+    assert not _download_buttons(at)[0].proto.disabled
+    assert any("Todas las diferencias están aceptadas" in c.value for c in at.caption)
+
+
+def test_ignoring_the_comparison_enables_the_download(monkeypatch, tmp_path):
+    at = _read_with_dims(monkeypatch, tmp_path, _dims_bytes())
+    assert _download_buttons(at)[0].proto.disabled
+    next(c for c in at.checkbox if c.label == "Ignorar la comparación").check().run()
+    assert not _download_buttons(at)[0].proto.disabled
+    assert any("Comparación ignorada" in c.value for c in at.caption)
+    assert at.multiselect[0].proto.disabled  # ya no hace falta elegir BOL
+
+
+def test_a_dims_without_barcode_is_reported_and_does_not_block(monkeypatch, tmp_path):
+    import io
+
+    from openpyxl import Workbook
+
+    book = Workbook()
+    book.active.append(["CARRIER", "Length"])
+    book.active.append(["BEX", 1])
+    buffer = io.BytesIO()
+    book.save(buffer)
+    at = _read_with_dims(monkeypatch, tmp_path, buffer.getvalue())
+    assert any("no encontré una columna llamada Barcode" in e.value for e in at.error)
+    assert not _download_buttons(at)[0].proto.disabled
 
 
 def test_ready_is_optional_and_messages_follow_what_is_typed(monkeypatch, tmp_path):
