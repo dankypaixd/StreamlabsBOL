@@ -179,3 +179,21 @@ def test_delivery_is_never_written_but_ready_date_is_in_every_workbook():
         # Scheduled Delivery Date / Time (AF, AG): vacias; el service level (AK) se conserva
         assert (sheet["AF1"].value, sheet["AG1"].value) == ("Scheduled Delivery Date", "Scheduled Delivery Time")
         assert (sheet["AF2"].value, sheet["AG2"].value, sheet["AK2"].value) == (None, None, "3D")
+
+
+def test_attention_and_service_level_can_each_be_left_out_of_the_sheet():
+    rows = _rows()[:1]
+    for attention, service in ((True, True), (False, True), (True, False), (False, False)):
+        blob, results = de.build_workbook(rows, "11/19/26 1356", include_attention=attention, include_service=service)
+        sheet = load_workbook(io.BytesIO(blob))["DATE"]
+        assert (sheet["AB2"].value, sheet["AC2"].value, sheet["DU2"].value) == (
+            ("Jane Testwell", "1+15551230147", "jane@example.com") if attention else (None, None, None)
+        )
+        assert sheet["AK2"].value == ("3D" if service else None)
+        # lo demas no cambia, y el service level se sigue calculando para mostrarlo
+        assert (sheet["B2"].value, sheet["E2"].value, sheet["Q2"].value, sheet["CO2"].value) == (3049901, "144463", "11/19/26", "HPDOM")
+        assert results[0].service == "3D" and ("no_service" not in results[0].warnings)
+    # sin service level no se avisa que falta el estado
+    blank = de.build_date_row(de.ShipmentRow("3049903", carrier="VRP"), "11/19/26 1356", include_service=False)
+    assert "no_service" not in blank.warnings
+    assert "no_service" in de.build_date_row(de.ShipmentRow("3049903", carrier="VRP"), "11/19/26 1356").warnings

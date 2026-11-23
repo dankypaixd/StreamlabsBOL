@@ -151,3 +151,39 @@ def test_inbond_classification_does_not_need_contact_fields():
         setattr(blank, fname, FieldRead())
     got = cr.build_contacts([PdfRead("VRP_x.pdf", [blank], 1)], None, None, need_contact=False)[0]
     assert got.status == "ok" and got.state == "FL"
+
+
+def _job(*bols, confirmed=()):
+    contacts = {}
+    for index, bol in enumerate(bols):
+        contact = cr.Contact(key=f"k{index}", bol=bol, source_file="VRP_x.pdf", pages=[index + 1])
+        contact.confirmed = contact.key in confirmed
+        contacts[contact.key] = contact
+    return contacts
+
+
+def test_fixing_a_bol_to_one_already_in_the_list_leaves_a_single_record():
+    # "98463300" era una mala lectura de "98163300": al corregirlo ya no queda como un BOL mas
+    contacts = _job("98163300", "98463300", "98163301")
+    edited = contacts["k1"]
+    edited.bol = "98163300"
+    assert cr.merge_duplicate_bol(contacts, edited) == ["98163300"]
+    assert sorted(c.bol for c in contacts.values()) == ["98163300", "98163301"]
+    assert contacts["k1"].pages == [1, 2]  # se queda el corregido y suma las paginas del que sobraba
+    assert "k0" not in contacts
+
+
+def test_the_already_confirmed_record_is_the_one_that_stays():
+    contacts = _job("98163300", "98463300", confirmed=("k0",))
+    edited = contacts["k1"]
+    edited.bol = "98163300"
+    cr.merge_duplicate_bol(contacts, edited)
+    assert list(contacts) == ["k0"] and contacts["k0"].pages == [1, 2]
+
+
+def test_no_duplicates_means_nothing_changes():
+    contacts = _job("98163300", "98163301")
+    edited = contacts["k1"]
+    assert cr.merge_duplicate_bol(contacts, edited) == [] and len(contacts) == 2
+    edited.bol = ""  # sin BOL no se junta con nadie
+    assert cr.merge_duplicate_bol(contacts, edited) == [] and len(contacts) == 2

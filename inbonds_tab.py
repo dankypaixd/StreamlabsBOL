@@ -284,6 +284,9 @@ def _confirm(key: str) -> None:
         contact.reasons = [r for r in contact.reasons if not r.startswith("carrier_")]
     cr.reclassify(contact, None, need_contact=False)
     contact.confirmed = True
+    removed = cr.merge_duplicate_bol(job["contacts"], contact)  # un BOL corregido a uno que ya estaba: queda uno solo
+    if removed:
+        job.setdefault("deduped", []).extend(removed)
 
 
 def _undo(key: str) -> None:
@@ -408,6 +411,8 @@ def render(t: Callable[..., str]) -> None:
     if not contacts:
         return
     st.success(t("ib_done", count=len(contacts)))
+    if job.get("deduped"):
+        st.info(t("ct_deduped", items=", ".join(dict.fromkeys(job["deduped"]))))
     compared = dims_compare.render_comparison(t, prefix="ib", pdf_bols=[c.bol for c in contacts], dims=dims)
     groups = {key: [c for c in contacts if _status(c) == key] for key in ("fail", "doubt", "ok", "confirmed")}
     columns = st.columns(4)
@@ -436,6 +441,9 @@ def render(t: Callable[..., str]) -> None:
     # ------------------------------------------------------------ exportar
     st.divider()
     st.markdown(f"#### {t('ib_export_heading')}")
+    include_service = st.checkbox(
+        t("ct_include_service"), value=True, help=t("ct_include_service_help"), key="ib_include_service",
+    )
     pending_doubt, pending_fail = len(groups["doubt"]), len(groups["fail"])
     if pending_doubt or pending_fail:
         st.warning(t("ct_pending_warn", doubt=pending_doubt, fail=pending_fail))
@@ -456,16 +464,16 @@ def render(t: Callable[..., str]) -> None:
     ]
     no_state = [s.bol for s in shipments if not sl.normalize_state(s.state)]
     no_carrier = [s.bol for s in shipments if not s.carrier]
-    if no_state:
+    if no_state and include_service:
         st.warning(t("ct_no_service_warn", items=", ".join(no_state[:20])))
     if no_carrier:
         st.warning(t("ct_no_carrier_warn", items=", ".join(no_carrier[:20])))
 
-    blob, results = de.build_workbook(shipments, ready, priority=de.PRIORITY_INBOND)
+    blob, results = de.build_workbook(shipments, ready, priority=de.PRIORITY_INBOND, include_service=include_service)
     st.caption(t("ib_priority_note") + " " + t("ct_row_count", count=len(results)))
     st.dataframe(pd.DataFrame([{
         t("ct_col_bol"): r.values["B"], "Carrier": next((s.carrier for s in shipments if s.bol == r.bol), ""),
-        t("ct_col_service"): r.service,
+        **({t("ct_col_service"): r.service} if include_service else {}),
         **ct.ready_columns(t, ready), "Consignee No.": r.values["T"],
         "FK": r.values["FK"],
     } for r in results]), width="stretch", hide_index=True)

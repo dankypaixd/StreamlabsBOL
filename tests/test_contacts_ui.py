@@ -235,3 +235,41 @@ def test_tables_show_ready_date_and_time_instead_of_delivery():
     assert "Fecha ready" not in contacts_tab._table(t, [contact], "").columns
     assert contacts_tab._service_text(t, "TX", "11/19/26 1356") == "Service level: 3D · READY DATE: 11/19/26 · 1356"
     assert contacts_tab._service_text(t, "TX", "") == "Service level: 3D"
+
+
+def test_fixing_a_bol_to_one_already_in_the_list_keeps_only_one(monkeypatch, tmp_path):
+    at = _read_with_dims(monkeypatch, tmp_path)
+    assert any("Se leyeron 3 BOL" in s.value for s in at.success)
+
+    # el 3049903 "se leyo mal": al corregirlo a 3049901 (que ya estaba) no debe quedar como un BOL mas
+    at.text_input(key="ct_bol_3049903").set_value("3049901").run()
+    at.button(key="doubt_3049903_ok").click().run()
+    assert not at.exception
+    assert any("Se leyeron 2 BOL" in s.value for s in at.success)
+    assert any("BOL repetidos" in i.value and "3049901" in i.value for i in at.info)
+    metrics = {m.label: m.value for m in at.metric}
+    assert metrics["✔ Confirmados"] == "1" and metrics["🟢 Sin error"] == "1"  # queda el corregido y el 3049902
+    (preview,) = [d.value for d in at.dataframe if "Consignee No." in d.value.columns]
+    assert list(preview["BOL"]) == [3049901, 3049902]  # una sola fila por BOL en el Excel
+
+
+def _preview_columns(at):
+    frames = [d.value for d in at.dataframe if "Consignee No." in d.value.columns]
+    assert len(frames) == 1
+    return list(frames[0].columns)
+
+
+def test_attention_and_service_level_options_change_the_columns_of_the_date(monkeypatch, tmp_path):
+    at = _read_with_dims(monkeypatch, tmp_path)
+    full = _preview_columns(at)
+    assert {"Nombre", "Teléfono", "Correo"} <= set(full) and any("ervice" in c for c in full)
+
+    at.checkbox(key="ct_include_attention").uncheck().run()
+    without_attention = _preview_columns(at)
+    assert not ({"Nombre", "Teléfono", "Correo"} & set(without_attention)) and any("ervice" in c for c in without_attention)
+    assert at.checkbox(key="ct_only_verified").proto.disabled  # sin Attention no hay nada que filtrar
+
+    at.checkbox(key="ct_include_service").uncheck().run()
+    bare = _preview_columns(at)
+    assert not any("ervice" in c for c in bare) and bare[0] == "BOL"
+    assert not _download_buttons(at)[0].proto.disabled  # solo con el BOL y el READY tambien se descarga

@@ -424,6 +424,28 @@ def build_contacts(
     return contacts
 
 
+def merge_duplicate_bol(contacts: dict[str, Contact], edited: Contact) -> list[str]:
+    """Deja un solo registro por BOL cuando se corrige un BOL a mano y ese numero ya estaba en la lista.
+
+    Si el otro registro ya estaba confirmado se queda ese; si no, se queda el que se acaba de corregir. El que sobra
+    se quita de `contacts` (sus paginas se suman al que se queda cuando son del mismo archivo). Devuelve los BOL
+    cuyo duplicado se quito (vacio si no habia ninguno).
+    """
+    if not edited.bol:
+        return []
+    twins = [c for c in contacts.values() if c is not edited and c.bol == edited.bol]
+    if not twins:
+        return []
+    keep = next((c for c in twins if c.confirmed), edited)
+    for contact in (edited, *twins):
+        if contact is keep:
+            continue
+        if contact.source_file == keep.source_file:
+            keep.pages = sorted(set(keep.pages) | set(contact.pages))
+        contacts.pop(contact.key, None)
+    return [edited.bol]
+
+
 def reclassify(contact: Contact, memory: Memory | None = None, need_contact: bool = True) -> Contact:
     """Vuelve a calcular el estado de una fila editada a mano por el usuario."""
     contact.phone = normalize_phone(contact.phone) if contact.phone else ""

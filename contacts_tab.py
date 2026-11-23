@@ -93,6 +93,11 @@ TEXT: dict[str, dict[str, str]] = {
         "ct_col_ready_time": "Hora ready",
         "ct_col_status": "Estado de lectura",
         "ct_export_heading": "Excel para importar",
+        "ct_include_attention": "Incluir el Ship To Attention (nombre, correo y teléfono) en la hoja DATE",
+        "ct_include_attention_help": "Si lo desmarcas, Consignee Contact, Consignee Phone y Consignee Email salen vacíos.",
+        "ct_include_service": "Incluir el service level en la hoja DATE",
+        "ct_include_service_help": "Si lo desmarcas, la columna Service sale vacía.",
+        "ct_deduped": "BOL repetidos: ya estaban en la lista y se dejó un solo registro de cada uno ({items}).",
         "ct_only_verified": "Solo incluir nombre, correo y teléfono de los verdes y confirmados",
         "ct_only_verified_help": (
             "Los dudosos e incompletos sin confirmar salen con esos tres campos vacíos para que no se "
@@ -216,6 +221,11 @@ TEXT: dict[str, dict[str, str]] = {
         "ct_col_ready_time": "Ready time",
         "ct_col_status": "Read status",
         "ct_export_heading": "Excel to import",
+        "ct_include_attention": "Include the Ship To Attention (name, email and phone) in the DATE sheet",
+        "ct_include_attention_help": "If unchecked, Consignee Contact, Consignee Phone and Consignee Email are left empty.",
+        "ct_include_service": "Include the service level in the DATE sheet",
+        "ct_include_service_help": "If unchecked, the Service column is left empty.",
+        "ct_deduped": "Repeated BOLs: they were already in the list, so only one record of each was kept ({items}).",
         "ct_only_verified": "Only include name, email and phone for green and confirmed rows",
         "ct_only_verified_help": (
             "Unconfirmed doubtful and incomplete rows leave those three fields empty so that nothing "
@@ -385,6 +395,9 @@ def _confirm(key: str) -> None:
     ss[f"ct_phone_{k}"] = contact.phone
     contact.learned = False
     _learn([contact])
+    removed = cr.merge_duplicate_bol(job["contacts"], contact)  # un BOL corregido a uno que ya estaba: queda uno solo
+    if removed:
+        job.setdefault("deduped", []).extend(removed)
 
 
 def _undo(key: str) -> None:
@@ -597,6 +610,8 @@ def render(t: Callable[..., str]) -> None:
 
     contacts = sorted(job["contacts"].values(), key=lambda c: (_numeric(c.bol), c.source_file))
     st.success(t("ct_done", contacts=len(contacts), pages=job["pages"]))
+    if job.get("deduped"):
+        st.info(t("ct_deduped", items=", ".join(dict.fromkeys(job["deduped"]))))
     if job["skipped"]:
         st.caption(t("ct_skipped", items="; ".join(f"{n}: {', '.join(map(str, p))}" for n, p in job["skipped"].items())))
     compared = dims_compare.render_comparison(
@@ -645,7 +660,16 @@ def render(t: Callable[..., str]) -> None:
     # ------------------------------------------------------------ exportar
     st.divider()
     st.markdown(f"#### {t('ct_export_heading')}")
-    only_verified = st.checkbox(t("ct_only_verified"), value=True, help=t("ct_only_verified_help"), key="ct_only_verified")
+    include_attention = st.checkbox(
+        t("ct_include_attention"), value=True, help=t("ct_include_attention_help"), key="ct_include_attention",
+    )
+    only_verified = st.checkbox(
+        t("ct_only_verified"), value=True, help=t("ct_only_verified_help"), key="ct_only_verified",
+        disabled=not include_attention,
+    )
+    include_service = st.checkbox(
+        t("ct_include_service"), value=True, help=t("ct_include_service_help"), key="ct_include_service",
+    )
     pending_doubt = sum(1 for c in groups["doubt"])
     pending_fail = sum(1 for c in groups["fail"])
     if pending_doubt or pending_fail:
@@ -655,15 +679,19 @@ def render(t: Callable[..., str]) -> None:
         st.info(t("ct_need_ready"))  # un READY mal escrito no se exporta en blanco por error
         return
     shipments, notes = _shipments(job, only_verified)
-    if notes["no_state"]:
+    if notes["no_state"] and include_service:  # sin service level no hace falta el estado
         st.warning(t("ct_no_service_warn", items=", ".join(notes["no_state"][:20])))
     if notes["no_carrier"]:
         st.warning(t("ct_no_carrier_warn", items=", ".join(notes["no_carrier"][:20])))
 
-    date_bytes, results = de.build_workbook(shipments, ready)
+    date_bytes, results = de.build_workbook(
+        shipments, ready, include_attention=include_attention, include_service=include_service,
+    )
     preview = pd.DataFrame([{
-        t("ct_col_bol"): r.values["B"], t("ct_col_name"): r.values["AB"], t("ct_col_phone"): r.values["AC"],
-        t("ct_col_email"): r.values["DU"], t("ct_col_service"): r.service,
+        t("ct_col_bol"): r.values["B"],
+        **({t("ct_col_name"): r.values["AB"], t("ct_col_phone"): r.values["AC"], t("ct_col_email"): r.values["DU"]}
+           if include_attention else {}),
+        **({t("ct_col_service"): r.service} if include_service else {}),
         **ready_columns(t, ready), "Consignee No.": r.values["T"],
     } for r in results])
     st.caption(t("ct_row_count", count=len(results)))

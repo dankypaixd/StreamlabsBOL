@@ -178,12 +178,18 @@ class DateResult:
     warnings: list[str] = field(default_factory=list)
 
 
-def build_date_row(row: ShipmentRow, ready: str, priority: str = "") -> DateResult:
-    """Fila de DATE para un BOL. `ready` = 'MM/DD/YY HHMM' (ya normalizado)."""
+def build_date_row(
+    row: ShipmentRow, ready: str, priority: str = "", include_attention: bool = True, include_service: bool = True,
+) -> DateResult:
+    """Fila de DATE para un BOL. `ready` = 'MM/DD/YY HHMM' (ya normalizado).
+
+    Con `include_attention=False` el Ship To Attention (AB, AC y DU) sale vacio; con `include_service=False`, el
+    service level (AK). `DateResult.service` siempre trae el calculado (solo se usa para mostrarlo).
+    """
     warnings: list[str] = []
     service = service_label(row.state)
     delivery = delivery_text(ready, row.state) if service and ready else ""
-    if not service:
+    if not service and include_service:
         warnings.append("no_service")
     if not ready:
         warnings.append("no_ready")
@@ -199,13 +205,13 @@ def build_date_row(row: ShipmentRow, ready: str, priority: str = "") -> DateResu
         "R": ready[-5:] if ready else "",
         "S": PICKUP_CLOSE if ready else "",
         "T": row.consignee,
-        "AB": row.name,
-        "AC": row.phone,
-        "AK": service,
+        "AB": row.name if include_attention else "",
+        "AC": row.phone if include_attention else "",
+        "AK": service if include_service else "",
         "CO": PRODUCT_CODE,
         "DJ": BILLTO_REF_TYPE,
         "DK": "1" if row.hazmat else "0",
-        "DU": row.email,
+        "DU": row.email if include_attention else "",
         "FK": priority,
     }
     return DateResult(row.bol, service, delivery, values, warnings)
@@ -242,9 +248,14 @@ def build_workbook(
     shipments: Iterable[ShipmentRow],
     ready: str,
     priority: str = "",
+    include_attention: bool = True,
+    include_service: bool = True,
 ) -> tuple[bytes, list[DateResult]]:
-    """Devuelve (xlsx, resultados): un libro con la sola hoja DATE, sin formato."""
-    results = [build_date_row(row, ready, priority) for row in shipments]
+    """Devuelve (xlsx, resultados): un libro con la sola hoja DATE, sin formato.
+
+    `include_attention` / `include_service` deciden si el Ship To Attention y el service level van en la hoja.
+    """
+    results = [build_date_row(row, ready, priority, include_attention, include_service) for row in shipments]
     buffer = io.BytesIO()
     book = xlsxwriter.Workbook(
         buffer, {"in_memory": True, "strings_to_numbers": False, "strings_to_formulas": False, "strings_to_urls": False}

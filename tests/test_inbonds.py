@@ -215,3 +215,16 @@ def test_inbonds_dims_is_optional_and_only_compares_the_bols():
     assert _ib_download(at).proto.disabled
     next(c for c in at.checkbox if c.label == "Ignorar la comparación").check().run()
     assert not _ib_download(at).proto.disabled  # ignorada
+
+
+@pytest.mark.skipif(shutil.which("tesseract") is None, reason="Tesseract no instalado")
+def test_inbonds_service_level_can_be_left_out_of_the_date():
+    at = _inbonds_with_dims(None)
+    frames = [d.value for d in at.dataframe if "Consignee No." in d.value.columns]
+    assert len(frames) == 1 and any("ervice" in c for c in frames[0].columns)
+    assert not [c for c in at.checkbox if c.label.startswith("Incluir el Ship To Attention")]  # Inbonds no lee contactos
+
+    at.checkbox(key="ib_include_service").uncheck().run()
+    (frame,) = [d.value for d in at.dataframe if "Consignee No." in d.value.columns]
+    assert not any("ervice" in c for c in frame.columns) and "FK" in frame.columns
+    assert not _ib_download(at).proto.disabled

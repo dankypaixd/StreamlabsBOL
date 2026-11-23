@@ -82,6 +82,14 @@ con los mismos valores que calculan tus fórmulas. **La fecha y hora de entrega 
 conservan para no mover columnas. Por defecto, los dudosos e incompletos sin confirmar salen con nombre, correo y teléfono
 vacíos (casilla en pantalla).
 
+Dos casillas arriba de la descarga deciden qué lleva la hoja: **Incluir el Ship To Attention** (nombre, correo y teléfono:
+`AB`, `AC` y `DU`) e **Incluir el service level** (`AK`); en Inbonds solo existe la del service level. Ambas vienen
+marcadas; al desmarcarlas esas columnas salen vacías y la tabla de vista previa las oculta.
+
+**Sin BOL repetidos.** Si al revisar corriges un BOL (p. ej. una mala lectura `98463300` en lugar de `98163300`) y ese
+número ya estaba en la lista, queda un solo registro: el que ya estaba confirmado o, si no, el que acabas de corregir (se
+suman sus páginas). Se avisa con un mensaje arriba de los resultados y el conteo de BOL baja.
+
 **El archivo sale sin formato, para importarlo tal cual.** Antes había que copiar la hoja y pegarla como “solo valores” en otra.
 El motivo: el archivo traía el primer renglón inmovilizado, anchos en las 198 columnas y los textos guardados “en línea”
 (no como los guarda Excel). Ahora se escribe con XlsxWriter sin anchos, sin paneles, sin estilos y con textos compartidos; las
