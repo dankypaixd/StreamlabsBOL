@@ -22,8 +22,11 @@ Columnas de DATE que se llenan (el resto queda vacio, como en el template):
     DU Consignee Email         correo            <- Ship To Attention
     FK Priority Code           "INBD" (solo pestana Inbonds)
 
-La fecha y hora de entrega (Scheduled Delivery Date / Time, AF y AG de DATE) NO se escriben en ningun
-Excel: no se usan para importar. La entrega solo se calcula para mostrarla (DateResult.delivery).
+La fecha y hora de entrega (Scheduled Delivery Date / Time) son opcionales y por defecto NO se escriben:
+    AF Scheduled Delivery Date  MM/DD/YY: READY DATE + service level (dias habiles, cut-off 0800-1700) o la que
+                                se escriba a mano (ShipmentRow.delivery)
+    AG Scheduled Delivery Time  "1600" cuando hay fecha de entrega
+Con `include_delivery=True` se escriben; sin la casilla (o sin fecha) quedan vacias.
 
 El DIMS ya no aporta datos al Excel: solo se lee su columna Barcode para verificar que trae los mismos BOL
 que los PDF (ver dims_compare.py).
@@ -49,6 +52,7 @@ HEADERS_FILE = Path(__file__).parent / "assets" / "DATE_HEADERS.json"
 SHIPPER_NUMBER = {"BEX": "149570", "VRP": "144463"}
 STATION = "DFW"
 PICKUP_CLOSE = "1700"
+DELIVERY_TIME = "1600"
 PRODUCT_CODE = "HPDOM"
 BILLTO_REF_TYPE = "RAX"
 
@@ -68,6 +72,36 @@ def format_ready(value: str | datetime | None) -> str:
     if parsed is None:
         return ""
     return f"{parsed:%m/%d/%y} {parsed:%H%M}"
+
+
+_DELIVERY_RE = re.compile(r"^\s*(\d{1,2})[/\-.](\d{1,2})(?:[/\-.](\d{2}|\d{4}))?\s*$")
+
+
+def format_delivery(value: str | datetime | None, ready: str = "") -> str:
+    """Fecha de entrega escrita a mano -> 'MM/DD/YY' ('' si no es una fecha real).
+
+    Acepta 11/27/26, 11/27/2026, 11-27-26 y 11/27 (el ano es el del READY DATE o, sin READY, el actual).
+    """
+    if isinstance(value, datetime):
+        return f"{value:%m/%d/%y}"
+    match = _DELIVERY_RE.match(str(value or ""))
+    if not match:
+        return ""
+    month, day, year = match.groups()
+    if year is None:
+        base = parse_ready(ready)
+        year_i = base.year if base else datetime.now().year
+    else:
+        year_i = int(year) + 2000 if len(year) == 2 else int(year)
+    try:
+        return f"{datetime(year_i, int(month), int(day)):%m/%d/%y}"
+    except ValueError:
+        return ""
+
+
+def auto_delivery(row: "ShipmentRow", ready: str) -> str:
+    """Fecha de entrega calculada (READY DATE + service level del estado) o '' si falta alguno."""
+    return delivery_text(ready, row.state) if ready and service_label(row.state) else ""
 
 
 # ------------------------------------------------------------------ DIMS
@@ -167,28 +201,31 @@ class ShipmentRow:
     carrier: str = ""  # BEX / VRP
     hazmat: bool = False
     consignee: str = ""  # Consignee Number (DATE!T): solo para Ship To de Laredo / Miami
+    delivery: str | None = None  # fecha de entrega: None = calcularla, "" = en blanco, "MM/DD/YY" = la de la persona
 
 
 @dataclass
 class DateResult:
     bol: str
     service: str
-    delivery: str  # MM/DD/YY
+    delivery: str  # MM/DD/YY: la que lleva el BOL (la escrita a mano o, si no, la calculada)
     values: dict[str, object]  # letra de columna -> valor
     warnings: list[str] = field(default_factory=list)
 
 
 def build_date_row(
     row: ShipmentRow, ready: str, priority: str = "", include_attention: bool = True, include_service: bool = True,
+    include_delivery: bool = False,
 ) -> DateResult:
     """Fila de DATE para un BOL. `ready` = 'MM/DD/YY HHMM' (ya normalizado).
 
     Con `include_attention=False` el Ship To Attention (AB, AC y DU) sale vacio; con `include_service=False`, el
-    service level (AK). `DateResult.service` siempre trae el calculado (solo se usa para mostrarlo).
+    service level (AK); con `include_delivery=True` se escriben la fecha (AF) y la hora (AG) de entrega.
+    `DateResult.service` siempre trae el calculado (solo se usa para mostrarlo).
     """
     warnings: list[str] = []
     service = service_label(row.state)
-    delivery = delivery_text(ready, row.state) if service and ready else ""
+    delivery = auto_delivery(row, ready) if row.delivery is None else row.delivery
     if not service and include_service:
         warnings.append("no_service")
     if not ready:
@@ -207,6 +244,8 @@ def build_date_row(
         "T": row.consignee,
         "AB": row.name if include_attention else "",
         "AC": row.phone if include_attention else "",
+        "AF": delivery if include_delivery else "",
+        "AG": DELIVERY_TIME if include_delivery and delivery else "",
         "AK": service if include_service else "",
         "CO": PRODUCT_CODE,
         "DJ": BILLTO_REF_TYPE,
@@ -250,12 +289,16 @@ def build_workbook(
     priority: str = "",
     include_attention: bool = True,
     include_service: bool = True,
+    include_delivery: bool = False,
 ) -> tuple[bytes, list[DateResult]]:
     """Devuelve (xlsx, resultados): un libro con la sola hoja DATE, sin formato.
 
-    `include_attention` / `include_service` deciden si el Ship To Attention y el service level van en la hoja.
+    `include_attention` / `include_service` / `include_delivery` deciden si el Ship To Attention, el service level
+    y la fecha de entrega (AF y AG) van en la hoja.
     """
-    results = [build_date_row(row, ready, priority, include_attention, include_service) for row in shipments]
+    results = [
+        build_date_row(row, ready, priority, include_attention, include_service, include_delivery) for row in shipments
+    ]
     buffer = io.BytesIO()
     book = xlsxwriter.Workbook(
         buffer, {"in_memory": True, "strings_to_numbers": False, "strings_to_formulas": False, "strings_to_urls": False}

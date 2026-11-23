@@ -290,3 +290,26 @@ def test_an_exact_memory_match_does_not_hide_a_doubtful_bol(tmp_path):
     weak.bol = field("3049901", 0.5)
     got = build([weak], memory)[0]
     assert "memory_exact" in got.reasons and got.status == "doubt"  # BOL poco claro: la memoria no lo da por bueno
+
+
+# ------------------------------------------------------------------ fila Tracking No
+
+
+def test_a_tracking_number_one_digit_away_from_the_bol_is_yellow_and_shows_both_numbers():
+    got = build([page(1, bol="98100010", tracking_value="98100018", page_of=(1, 2))])[0]
+    assert got.status == "doubt" and "tracking_mismatch:98100018" in got.reasons
+
+
+def test_a_tracking_number_that_looks_nothing_like_the_bol_is_only_a_note():
+    got = build([page(1, bol="98100010", tracking_value="30081016", page_of=(1, 2))])[0]
+    assert got.status == "ok" and "tracking_other:30081016" in got.reasons
+    assert "tracking_mismatch" not in " ".join(got.reasons)
+
+
+def test_the_tracking_row_of_a_continuation_page_is_not_compared_with_the_bol():
+    first = page(1, bol="98100010", tracking_value="98100010", page_of=(1, 2))
+    second = page(2, bol="98100010", tracking_value="98100018", page_of=(2, 2))  # empieza en otra caja
+    got = build([first, second])[0]
+    assert got.status == "ok" and not [r for r in got.reasons if r.startswith("tracking")]
+    # sin "Page n OF m" se compara como antes
+    assert build([page(1, bol="98100010", tracking_value="98100018")])[0].status == "doubt"

@@ -26,6 +26,25 @@ def test_mend_repairs_a_dot_read_as_space_or_colon_and_ignores_scan_specks():
     assert mend("jane@example |\n.com") == "jane@example.com"  # mancha del escaneo entre las dos lineas
 
 
+def test_mend_completes_an_ending_that_the_line_width_cut_in_the_middle():
+    # el ancho del renglon corto ".COM" despues de ".CO"; la "M" quedo al inicio del renglon de abajo
+    text = mend("JANE TESTWELL /\nR0123/JTESTWELL@SAMPLEMMC.CO\nM/1-+15551230147")
+    split = ce.split_contact(text)
+    assert split.email == "JTESTWELL@SAMPLEMMC.COM" and split.phone == "1-+15551230147"
+    assert mend("jane@example.ne\nT 1+15551230147").startswith("jane@example.neT")  # .net partido: tambien se junta
+
+
+def test_mend_does_not_eat_the_next_line_when_the_ending_was_already_complete():
+    assert mend("jane@example.co\n1+15551230147") == "jane@example.co\n1+15551230147"
+    assert mend("jane@example.co\nMaria Testwell") == "jane@example.co\nMaria Testwell"
+
+
+def test_mend_glues_a_domain_cut_in_the_middle_of_a_word_without_inventing_a_dot():
+    assert mend("jane.testwell@exam\nplegroup.com") == "jane.testwell@examplegroup.com"
+    assert mend("jane@sub.\nexample.com") == "jane@sub.example.com"  # aqui el punto si estaba
+    assert mend("jane@example\ncom") == "jane@example.com"  # una terminacion suelta lleva su punto
+
+
 def test_mend_leaves_a_valid_email_and_the_next_line_alone():
     text = "Jane Testwell\njane@example.com\n1+15551230147"
     assert mend(text) == text
