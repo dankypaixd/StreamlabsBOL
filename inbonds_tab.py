@@ -445,6 +445,9 @@ def render(t: Callable[..., str]) -> None:
     include_service = st.checkbox(
         t("ct_include_service"), value=True, help=t("ct_include_service_help"), key="ib_include_service",
     )
+    include_delivery = st.checkbox(
+        t("ct_include_delivery"), value=False, help=t("ct_include_delivery_help"), key="ib_include_delivery",
+    )
     pending_doubt, pending_fail = len(groups["doubt"]), len(groups["fail"])
     if pending_doubt or pending_fail:
         st.warning(t("ct_pending_warn", doubt=pending_doubt, fail=pending_fail))
@@ -470,14 +473,33 @@ def render(t: Callable[..., str]) -> None:
     if no_carrier:
         st.warning(t("ct_no_carrier_warn", items=", ".join(no_carrier[:20])))
 
-    blob, results = de.build_workbook(shipments, ready, priority=de.PRIORITY_INBOND, include_service=include_service)
+    delivery_base, delivery_error = ({}, False)
+    if include_delivery:
+        delivery_base, delivery_error = ct.delivery_inputs(t, prefix="ib", ready=ready, shipments=shipments)
+
+    def build() -> tuple[bytes, list[de.DateResult]]:
+        return de.build_workbook(
+            shipments, ready, priority=de.PRIORITY_INBOND, include_service=include_service,
+            include_delivery=include_delivery,
+        )
+
+    blob, results = build()
     st.caption(t("ib_priority_note") + " " + t("ct_row_count", count=len(results)))
-    st.dataframe(pd.DataFrame([{
+    preview = pd.DataFrame([{
         t("ct_col_bol"): r.values["B"], "Carrier": next((s.carrier for s in shipments if s.bol == r.bol), ""),
         **({t("ct_col_service"): r.service} if include_service else {}),
         **ct.ready_columns(t, ready), "Consignee No.": r.values["T"],
         "FK": r.values["FK"],
-    } for r in results]), width="stretch", hide_index=True)
+    } for r in results])
+    if include_delivery:
+        changed, bad = ct.delivery_table(  # la fecha va junto al BOL para que se vea en la pantalla del telefono
+            t, prefix="ib", ready=ready, shipments=shipments, base=delivery_base, frame=preview, position=1,
+        )
+        delivery_error = delivery_error or bad
+        if changed:
+            blob, results = build()
+    else:
+        st.dataframe(preview, width="stretch", hide_index=True)
 
     name_input = st.text_input(t("ct_filename"), key="ib_filename", help=t("ct_filename_help"), placeholder=ready or "DATE_IMPORT")
     file_name = de.safe_filename(name_input, ready)
@@ -486,5 +508,5 @@ def render(t: Callable[..., str]) -> None:
         st.info(t("dc_pending_download"))
     st.download_button(
         t("ib_download"), data=blob, file_name=file_name, mime=XLSX_MIME, width="stretch", key="ib_dl", type="primary",
-        disabled=not compared,
+        disabled=not compared or delivery_error,
     )

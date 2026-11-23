@@ -149,7 +149,7 @@ def test_ready_is_optional_and_leaves_dependent_fields_blank():
     result = de.build_date_row(row, "")
     values = result.values
     assert (values["Q"], values["R"], values["S"]) == ("", "", "")
-    assert values["AK"] == "3D" and values["E"] == "144463" and "AF" not in values and "AG" not in values
+    assert values["AK"] == "3D" and values["E"] == "144463" and values["AF"] == "" and values["AG"] == ""
     assert "no_ready" in result.warnings and result.delivery == ""
 
 
@@ -197,3 +197,57 @@ def test_attention_and_service_level_can_each_be_left_out_of_the_sheet():
     blank = de.build_date_row(de.ShipmentRow("3049903", carrier="VRP"), "11/19/26 1356", include_service=False)
     assert "no_service" not in blank.warnings
     assert "no_service" in de.build_date_row(de.ShipmentRow("3049903", carrier="VRP"), "11/19/26 1356").warnings
+
+
+# ------------------------------------------------------------ fecha de entrega (opcional)
+
+
+def _delivery_cells(blob, row=2):
+    sheet = load_workbook(io.BytesIO(blob))["DATE"]
+    return sheet[f"AF{row}"].value, sheet[f"AG{row}"].value
+
+
+def test_delivery_date_is_off_by_default_and_filled_when_asked():
+    ready = "11/23/26 0800"  # lunes
+    rows = [de.ShipmentRow("1", state="VA", carrier="BEX"), de.ShipmentRow("2", state="ME", carrier="BEX")]
+    assert _delivery_cells(de.build_workbook(rows, ready)[0]) == (None, None)
+    blob, results = de.build_workbook(rows, ready, include_delivery=True)
+    # 3D desde el lunes 23 es el jueves 26; con 4D es el viernes 27
+    assert _delivery_cells(blob, 2) == ("11/26/26", "1600")
+    assert _delivery_cells(blob, 3) == ("11/27/26", "1600")
+    assert [r.delivery for r in results] == ["11/26/26", "11/27/26"]
+
+
+def test_a_delivery_date_typed_by_hand_wins_and_blank_stays_blank():
+    ready = "11/23/26 0800"
+    rows = [
+        de.ShipmentRow("1", state="VA", carrier="BEX", delivery="12/01/26"),  # a mano
+        de.ShipmentRow("2", state="VA", carrier="BEX", delivery=""),  # en blanco a proposito
+        de.ShipmentRow("3", state="VA", carrier="BEX"),  # calculada
+    ]
+    blob, _ = de.build_workbook(rows, ready, include_delivery=True)
+    assert _delivery_cells(blob, 2) == ("12/01/26", "1600")
+    assert _delivery_cells(blob, 3) == (None, None)  # sin fecha tampoco hay hora
+    assert _delivery_cells(blob, 4) == ("11/26/26", "1600")
+
+
+def test_delivery_without_ready_date_or_state_is_blank_unless_typed():
+    assert de.auto_delivery(de.ShipmentRow("1", state="VA"), "") == ""
+    assert de.auto_delivery(de.ShipmentRow("1", state=""), "11/23/26 0800") == ""
+    blob, _ = de.build_workbook([de.ShipmentRow("1", state="VA", delivery="11/27/26")], "", include_delivery=True)
+    assert _delivery_cells(blob) == ("11/27/26", "1600")
+
+
+def test_after_cutoff_pushes_the_calculated_delivery_one_business_day():
+    row = de.ShipmentRow("1", state="VA")
+    assert de.auto_delivery(row, "11/23/26 0800") == "11/26/26"
+    assert de.auto_delivery(row, "11/23/26 1800") == "11/27/26"  # despues de las 17:00 el dia 0 es el siguiente
+
+
+def test_format_delivery_accepts_common_ways_of_typing_a_date():
+    ready = "11/23/26 0800"
+    for text in ("11/27/26", "11/27/2026", "11-27-26", "11.27.26", " 11/27 "):
+        assert de.format_delivery(text, ready) == "11/27/26"
+    for bad in ("", "abc", "2/30/26", "13/01/26", "11/27/26 1600"):
+        assert de.format_delivery(bad, ready) == ""
+    assert de.format_delivery("11/27", "12/30/27 0800") == "11/27/27"  # el ano sale del READY DATE

@@ -353,7 +353,12 @@ def mend_email_breaks(
         next_end = len(text) if next_end < 0 else next_end
         nxt = text[end + 1:next_end]
         piece = re.sub(r"[^A-Za-z0-9.\-]", "", nxt)  # sin espacios ni manchas ("|") del escaneo
-        joined = tail_clean + (piece if piece.startswith(".") or tail_clean.endswith(".") or not tail_clean else "." + piece)
+        # Si el renglon de abajo ya es un dominio completo ("plegroup.com") el corte fue a media palabra
+        # ("exam" + "plegroup.com" = examplegroup.com): se pega sin punto. Una terminacion suelta ("com")
+        # si lleva el punto que se perdio.
+        mid_word = "." in piece.strip(".") and _has_tld(piece) and not piece.startswith(".")
+        glue = "" if piece.startswith(".") or tail_clean.endswith(".") or not tail_clean or mid_word else "."
+        joined = tail_clean + glue + piece
         local = re.sub(r"\s+", "", text[start:at])
         candidate = f"{local}@{joined}"
         shaped = re.fullmatch(r"\.?[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+){0,3}", piece) is not None
@@ -362,11 +367,25 @@ def mend_email_breaks(
             delete.update(i for i in range(at + 1, end) if not re.match(r"[A-Za-z0-9.\-]", text[i]))  # manchas
             delete.update(i for i in range(end + 1, next_end) if text[i].isspace())
             first = next((i for i in range(end + 1, next_end) if not text[i].isspace()), None)
-            if first is not None and not tail_clean.endswith(".") and not piece.startswith(".") and tail_clean:
+            if first is not None and glue:
                 insert[first] = "."
+    # la terminacion partida a media palabra por el ancho de la linea: "...MMC.CO" + "M/1-+1715..." -> ".COM"
+    if end < len(text) and not any(i >= end for i in delete):
+        next_end = text.find("\n", end + 1)
+        next_end = len(text) if next_end < 0 else next_end
+        ending = re.search(r"\.([A-Za-z]{1,5})$", tail_clean)
+        lead = re.match(r"([ \t]*)([A-Za-z]{1,3})(?=[^A-Za-z]|$)", text[end + 1:next_end])
+        if ending and lead and _completes_tld(ending.group(1), lead.group(2)):
+            delete.update(range(end, end + 1 + len(lead.group(1))))  # el salto de linea y la sangria
     if not delete and not insert:
         return text, mapping
     return _edit_text(text, mapping, delete, insert)
+
+
+def _completes_tld(head: str, tail: str) -> bool:
+    """`head` + `tail` es una terminacion conocida mas larga que `head` ("co"+"m", "ne"+"t", "or"+"g")."""
+    whole = (head + tail).lower()
+    return whole in KNOWN_TLDS and len(whole) > len(head)
 
 
 def tidy_name(text: str) -> str:

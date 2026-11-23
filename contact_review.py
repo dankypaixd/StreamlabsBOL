@@ -292,9 +292,15 @@ def merge_pages(pdfs: Iterable[PdfRead]) -> list[Contact]:
             contact.reasons.append("email_near_edge")
         if all(p.empty_block for p in pages):
             contact.reasons.append("empty_block")
-        tracking = {p.tracking_value for p in pages if p.tracking_value}
-        if tracking and tracking != {contact.bol}:
-            contact.reasons.append("tracking_mismatch")
+        # La fila Tracking No de una pagina de continuacion ("2 OF 2") empieza en otra caja: no se compara.
+        tracking = {
+            p.tracking_value for p in pages if p.tracking_value and not (p.page_of and p.page_of[0] > 1)
+        }
+        for other in sorted(tracking - {contact.bol}):
+            # Un numero casi igual (<= 2 digitos) es una mala lectura de uno de los dos: se revisa. Uno que no se
+            # parece en nada es otro numero (no una lectura del BOL): solo se avisa, sin pasar a amarillo.
+            kind = "tracking_mismatch" if _hamming(other, contact.bol) <= 2 else "tracking_other"
+            contact.reasons.append(f"{kind}:{other}")
         if len(pages) > 1:
             for fname, norm in (("name", _norm_name), ("email", str.lower), ("phone", phone_key), ("state", lambda s: s)):
                 values = {norm(getattr(p, fname).value) for p in pages if getattr(p, fname).value}
@@ -374,7 +380,7 @@ def snap_to_data(contact: Contact, barcodes: set[str]) -> None:
         return
     # Los BOL son consecutivos (3049111, 3049211...): solo se ajusta si la lectura del propio
     # BOL fue dudosa; si todas las lecturas coinciden, se respeta y se avisa que no esta en DATA.
-    unsure = contact.agreement.get("bol", 0.0) < AGREE_BOL or "tracking_mismatch" in contact.reasons
+    unsure = contact.agreement.get("bol", 0.0) < AGREE_BOL or any(r.startswith("tracking_mismatch") for r in contact.reasons)
     near = [b for b in barcodes if len(b) == len(contact.bol) and _edit_distance(b, contact.bol) == 1] if unsure else []
     if len(near) == 1:
         contact.fixes["bol"] = contact.bol
@@ -444,7 +450,7 @@ def classify(
             if contact.agreement.get(fname, 0.0) < limit:
                 soft.append(f"lowagree:{fname}")
     informational = {"bol_not_in_data", "bol_not_in_dims", "destination_mexico", "destination_latam", "empty_block"}
-    flags = [r for r in contact.reasons if r not in informational and not r.startswith("memory_exact")]
+    flags = [r for r in contact.reasons if r not in informational and not r.startswith(("memory_exact", "tracking_other"))]
     if memory_exact:
         # La coincidencia exacta con memoria absorbe dudas del OCR, no las de BOL/estado.
         flags = [
@@ -454,7 +460,7 @@ def classify(
         contact.reasons.append("memory_exact")
 
     contact.reasons = _dedupe(
-        [r for r in contact.reasons if r in informational or r.startswith(("memory_exact", "memory_fix"))]
+        [r for r in contact.reasons if r in informational or r.startswith(("memory_exact", "memory_fix", "tracking_other"))]
         + hard + flags + soft
     )
     if hard:

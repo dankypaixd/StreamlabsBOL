@@ -47,3 +47,19 @@ def test_light_mode_skips_the_contact_block():
     page = ce.read_pdf(make_bol_pdf(SAMPLE[:1]), "x.pdf", workers=1, contact=False).pages[0]
     assert page.bol.value == "3049901" and page.state.value == "TX"
     assert page.name.value == page.email.value == page.phone.value == ""
+
+
+def test_email_cut_by_the_line_width_is_put_back_together():
+    """BEX parte la cadena nombre/correo/telefono por ancho: el .COM sale como ".CO" + "M" y un dominio, a media palabra."""
+    import contact_extractor as ce
+
+    pdf = make_bol_pdf([
+        {"bol": "98100001", "name": "", "email": "", "phone": "", "city_line": "MADISON, WI 53703",
+         "lines": ["JANE TESTWELL /", "R0123/JTESTWELL@SAMPLEMMC.CO", "M/1-+15551230147"]},
+        {"bol": "98100002", "name": "", "email": "", "phone": "", "city_line": "COLUMBUS, OH 43004",
+         "lines": ["OMAR FICTIONAL", "PO#AB-LL-006-1/omar.fictional@sam", "plegroup.com/1-+15559876543"]},
+    ])
+    first, second = ce.read_pdf(pdf, "BEX_x.pdf", workers=1).pages
+    assert first.email.value == "JTESTWELL@SAMPLEMMC.COM" and first.phone.value == "1+15551230147"
+    assert second.email.value == "omar.fictional@samplegroup.com"  # sin un punto inventado entre "sam" y "plegroup"
+    assert second.phone.value == "1+15559876543"

@@ -71,20 +71,31 @@ Un teléfono no tiene formato fijo: se aceptan dígitos y el signo `+`.
 
 **Service level.** Sale del estado del Ship To con `assets/SERVICE_LEVELS.csv` (`3D`, `4D`…). El READY DATE
 (`MM/DD/YY HHMM`, que se escribe en la pantalla) va al Excel como Pickup Date / Time / Close Time. La fecha de entrega
-(READY DATE + service level, cut-off 0800–1700) ya no se muestra ni se escribe en ningún Excel; `service_levels.py` la
-sigue calculando. Supuestos que no estaban en la especificación (ajustables ahí): después de las 17:00 el día 0 es el
+(READY DATE + service level, cut-off 0800–1700) la calcula `service_levels.py` y solo va al Excel si marcas la casilla de
+**fecha de entrega** (abajo). Supuestos que no estaban en la especificación (ajustables ahí): después de las 17:00 el día 0 es el
 siguiente día hábil; antes de las 08:00 el día 0 es el mismo día; un READY DATE en fin de semana arranca el lunes; no se
 descuentan feriados (`HOLIDAYS`).
 
 **Excel de salida.** Solo se descarga la hoja `DATE` (ya no hay hoja `DATA` ni libro completo). Tiene las 198 columnas del
 template; se llenan A, B, E, Q, R, S (READY DATE: Pickup Date, Time y Close Time), T (Consignee Number), AB, AC, AK, CO, DJ, DK y DU
-con los mismos valores que calculan tus fórmulas. **La fecha y hora de entrega (AF y AG) quedan vacías**; los encabezados se
-conservan para no mover columnas. Por defecto, los dudosos e incompletos sin confirmar salen con nombre, correo y teléfono
+con los mismos valores que calculan tus fórmulas. **La fecha y hora de entrega (AF y AG) quedan vacías salvo que marques la casilla de
+fecha de entrega**; los encabezados se conservan para no mover columnas. Por defecto, los dudosos e incompletos sin confirmar salen con nombre, correo y teléfono
 vacíos (casilla en pantalla).
 
 Dos casillas arriba de la descarga deciden qué lleva la hoja: **Incluir el Ship To Attention** (nombre, correo y teléfono:
 `AB`, `AC` y `DU`) e **Incluir el service level** (`AK`); en Inbonds solo existe la del service level. Ambas vienen
 marcadas; al desmarcarlas esas columnas salen vacías y la tabla de vista previa las oculta.
+
+**Fecha de entrega (opcional).** La casilla **Incluir la fecha de entrega en la hoja DATE** (viene sin marcar, en contactos e
+Inbonds) escribe `AF` (Scheduled Delivery Date, `MM/DD/YY`) y `AG` (Scheduled Delivery Time, `1600`). La fecha se **calcula
+sola** con el READY DATE y el service level de cada BOL, en días hábiles: con READY DATE el lunes 11/23/26, un BOL de 3D
+entrega el 11/26/26 y uno de 4D el 11/27/26; después de las 17:00 el día 0 pasa al siguiente día hábil. Se ve en la
+vista previa, en la columna **Fecha de entrega** (junto al BOL, para que se vea en el teléfono), y **se puede cambiar**
+tocando la celda; admite `11/27/26`, `11/27/2026` o `11/27`. Además hay un campo **Fecha de entrega para todos los BOL**
+(sustituye a la calculada) y el botón **Volver a calcular todas las fechas de entrega**. Lo que cambias a mano se conserva
+aunque cambies el READY DATE; una celda en blanco deja ese BOL sin fecha (y sin hora). Una fecha no válida bloquea la
+descarga hasta corregirla. No se descuentan feriados (`HOLIDAYS` en `service_levels.py` está vacío), así que por ejemplo
+el jueves de Thanksgiving se corrige a mano aquí.
 
 **Sin BOL repetidos.** Si al revisar corriges un BOL (p. ej. una mala lectura `98463300` en lugar de `98163300`) y ese
 número ya estaba en la lista, queda un solo registro: el que ya estaba confirmado o, si no, el que acabas de corregir (se
@@ -100,12 +111,17 @@ lo lee con claridad (≥ 70 % de las lecturas). Además:
   lugares). Una coincidencia exacta con la memoria ya no esconde un BOL dudoso.
 - *Páginas “1 OF 2” / “2 OF 2”.* Se lee “Page: n OF m” del encabezado; una segunda página consecutiva cuyo BOL difiere en uno o
   dos dígitos y viene dudosa se une a la primera en vez de contarse como otro BOL.
+- *Fila Tracking No.* El aviso ahora dice qué número leyó la fila. Solo pasa a 🟡 si ese número es casi igual al BOL (hasta
+  2 dígitos de diferencia: una mala lectura de uno de los dos). Un número que no se parece en nada es otro dato (por
+  ejemplo, la primera caja de la 2ª página) y solo se avisa; la fila Tracking No de las páginas de continuación
+  (“2 OF 2”) ya no se compara con el BOL.
 - *Parecido a otro BOL de la lista.* Un BOL dudoso que difiere en un solo dígito de otro ya leído muestra “Usar ese BOL”;
   nunca se corrige solo (los BOL consecutivos sí pueden diferir en un dígito).
 
 **Nombre y correo en varias líneas.** Si el nombre o el correo se escribieron en renglones distintos, se vuelven a armar:
 el `.com` (o `com`) que quedó abajo, el salto justo después de la `@`, la `@` al inicio de la línea, el punto leído como espacio
-o dos puntos (`fakehp : com`) y las manchas del escaneo (`|`). Solo se une si el resultado es un correo válido, para no tragarse el
+o dos puntos (`fakehp : com`), la terminación partida a media palabra (`…SAMPLE.CO` + `M/` en la línea de abajo → `.COM`), un dominio
+partido a media palabra (`…@exam` + `plegroup.com` → `examplegroup.com`, sin inventar un punto) y las manchas del escaneo (`|`). Solo se une si el resultado es un correo válido, para no tragarse el
 teléfono. Si aun así falta la terminación, se vuelve a leer la zona de la derecha y de abajo y se acepta una terminación conocida
 si coinciden 2 de 3 lecturas. Las palabras sueltas de baja confianza (`a`, `seh:`) y los símbolos aislados se quitan del nombre,
 y las confusiones `i/l/I` del correo se desempatan con el nombre (queda en 🟡).

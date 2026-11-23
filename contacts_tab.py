@@ -95,6 +95,21 @@ TEXT: dict[str, dict[str, str]] = {
         "ct_export_heading": "Excel para importar",
         "ct_include_attention": "Incluir el Ship To Attention (nombre, correo y teléfono) en la hoja DATE",
         "ct_include_attention_help": "Si lo desmarcas, Consignee Contact, Consignee Phone y Consignee Email salen vacíos.",
+        "ct_include_delivery": "Incluir la fecha de entrega en la hoja DATE",
+        "ct_include_delivery_help": (
+            "Scheduled Delivery Date y Time. La fecha se calcula con el READY DATE y el service level de cada BOL "
+            "(días hábiles, cut-off 0800–1700) y la hora sale 1600. Puedes cambiarla abajo, en la tabla."
+        ),
+        "ct_delivery_all": "Fecha de entrega para todos los BOL (opcional, MM/DD/YY)",
+        "ct_delivery_all_help": "Si la escribes, todos los BOL llevan esa fecha en vez de la calculada. Después puedes cambiar alguno en la tabla.",
+        "ct_delivery_all_invalid": "La fecha de entrega para todos no es válida. Usa el formato 11/27/26.",
+        "ct_delivery_need_ready": "Escribe el READY DATE arriba para que la fecha de entrega se calcule sola (o escríbela a mano).",
+        "ct_delivery_hint": "Toca una fecha de la columna «{col}» para cambiarla. Las que cambies se conservan aunque cambies el READY DATE.",
+        "ct_delivery_changed": "{count} fecha(s) de entrega cambiadas a mano: {items}",
+        "ct_delivery_reset": "Volver a calcular todas las fechas de entrega",
+        "ct_delivery_invalid": "Fecha de entrega no válida en: {items}. Usa el formato 11/27/26 (o déjala en blanco).",
+        "ct_col_delivery": "Fecha de entrega",
+        "ct_col_delivery_help": "MM/DD/YY. Si la dejas en blanco, ese BOL sale sin fecha de entrega.",
         "ct_include_service": "Incluir el service level en la hoja DATE",
         "ct_include_service_help": "Si lo desmarcas, la columna Service sale vacía.",
         "ct_deduped": "BOL repetidos: ya estaban en la lista y se dejó un solo registro de cada uno ({items}).",
@@ -133,6 +148,8 @@ TEXT: dict[str, dict[str, str]] = {
         "r_destination_latam": "Destino en Latinoamérica: se entrega en Miami, FL (como en la pestaña 1).",
         "r_destination_unsure": "Las lecturas no se pusieron de acuerdo sobre si el destino es México/Latinoamérica: revisa la captura.",
         "r_tracking_mismatch": "El BOL del encabezado no coincide con el de la fila Tracking No.",
+        "r_tracking_mismatch_values": "El BOL del encabezado no coincide con la fila Tracking No, que dice {tracking}: puede ser una mala lectura de un dígito en uno de los dos.",
+        "r_tracking_other": "La fila Tracking No dice {tracking}, otro número que no se parece al BOL (no cuenta como error).",
         "r_bol_snapped": "El BOL se ajustó al más parecido que está en el DIMS.",
         "r_bol_similar": "Este BOL se parece al {bol}, que ya está en la lista: puede ser una mala lectura de un dígito.",
         "r_bol_alt": "El OCR dudó entre este BOL y el {bol}: revisa el dígito que cambia.",
@@ -226,6 +243,21 @@ TEXT: dict[str, dict[str, str]] = {
         "ct_export_heading": "Excel to import",
         "ct_include_attention": "Include the Ship To Attention (name, email and phone) in the DATE sheet",
         "ct_include_attention_help": "If unchecked, Consignee Contact, Consignee Phone and Consignee Email are left empty.",
+        "ct_include_delivery": "Include the delivery date in the DATE sheet",
+        "ct_include_delivery_help": (
+            "Scheduled Delivery Date and Time. The date is computed from the READY DATE and each BOL's service level "
+            "(business days, cut-off 0800–1700) and the time is 1600. You can change it below, in the table."
+        ),
+        "ct_delivery_all": "Delivery date for all BOLs (optional, MM/DD/YY)",
+        "ct_delivery_all_help": "If you type one, every BOL gets that date instead of the computed one. You can still change individual rows in the table.",
+        "ct_delivery_all_invalid": "The delivery date for all is not valid. Use the format 11/27/26.",
+        "ct_delivery_need_ready": "Type the READY DATE above so the delivery date is computed automatically (or type it by hand).",
+        "ct_delivery_hint": "Tap a date in the \"{col}\" column to change it. Your changes are kept even if you change the READY DATE.",
+        "ct_delivery_changed": "{count} delivery date(s) changed by hand: {items}",
+        "ct_delivery_reset": "Recalculate all delivery dates",
+        "ct_delivery_invalid": "Invalid delivery date in: {items}. Use the format 11/27/26 (or leave it empty).",
+        "ct_col_delivery": "Delivery date",
+        "ct_col_delivery_help": "MM/DD/YY. If left empty, that BOL goes without a delivery date.",
         "ct_include_service": "Include the service level in the DATE sheet",
         "ct_include_service_help": "If unchecked, the Service column is left empty.",
         "ct_deduped": "Repeated BOLs: they were already in the list, so only one record of each was kept ({items}).",
@@ -264,6 +296,8 @@ TEXT: dict[str, dict[str, str]] = {
         "r_destination_latam": "Destination in Latin America: delivered in Miami, FL (same as tab 1).",
         "r_destination_unsure": "The reads disagree on whether the destination is Mexico/Latin America: check the capture.",
         "r_tracking_mismatch": "The header BOL does not match the Tracking No row.",
+        "r_tracking_mismatch_values": "The header BOL does not match the Tracking No row, which says {tracking}: one of the two may have a misread digit.",
+        "r_tracking_other": "The Tracking No row says {tracking}, a different number that does not look like the BOL (not counted as an error).",
         "r_bol_snapped": "The BOL was adjusted to the closest one in the DIMS.",
         "r_bol_similar": "This BOL looks like {bol}, which is already in the list: it may be a one-digit misread.",
         "r_bol_alt": "The OCR hesitated between this BOL and {bol}: check the digit that differs.",
@@ -312,6 +346,10 @@ def _reason_text(t: Callable[..., str], reason: str) -> str:
         return t("r_bol_similar", bol=reason.split(":", 1)[1])
     if reason.startswith("bol_alt:"):
         return t("r_bol_alt", bol=reason.split(":", 1)[1])
+    if reason.startswith("tracking_mismatch:"):
+        return t("r_tracking_mismatch_values", tracking=reason.split(":", 1)[1])
+    if reason.startswith("tracking_other:"):
+        return t("r_tracking_other", tracking=reason.split(":", 1)[1])
     if ":" in reason and reason.split(":", 1)[0] in ("pages_disagree", "lowagree"):
         kind, field = reason.split(":", 1)
         return t(f"r_{kind}", field=t(f"f_{field}"))
@@ -582,6 +620,88 @@ def ready_block(
     return ready, invalid, {"pod": re.sub(r"\s+", " ", pod or "").strip(), **messages}
 
 
+# ---------------------------------------------------------- fecha de entrega
+
+
+def _reset_delivery(prefix: str) -> None:
+    st.session_state[f"{prefix}_delivery_over"] = {}
+    st.session_state[f"{prefix}_delivery_all"] = ""
+    st.session_state[f"{prefix}_delivery_gen"] = st.session_state.get(f"{prefix}_delivery_gen", 0) + 1  # editor nuevo
+
+
+def delivery_inputs(
+    t: Callable[..., str], *, prefix: str, ready: str, shipments: list[de.ShipmentRow],
+) -> tuple[dict[str, str], bool]:
+    """Fecha de entrega para todos y boton de recalcular. Deja en cada fila `delivery` (calculada o la cambiada).
+
+    Devuelve (fecha base de cada BOL, hay error). La base es la fecha para todos, si se escribio, o la calculada
+    (READY DATE + service level); lo que la persona cambia en la tabla se guarda aparte y gana sobre la base.
+    """
+    over: dict[str, str] = st.session_state.setdefault(f"{prefix}_delivery_over", {})
+    c_all, c_reset = st.columns([3, 2], vertical_alignment="bottom")
+    all_text = c_all.text_input(
+        t("ct_delivery_all"), key=f"{prefix}_delivery_all", help=t("ct_delivery_all_help"), placeholder="Ej. 11/27/26",
+    )
+    c_reset.button(t("ct_delivery_reset"), key=f"{prefix}_delivery_reset", on_click=_reset_delivery, args=(prefix,))
+    all_date = de.format_delivery(all_text, ready) if all_text.strip() else ""
+    error = bool(all_text.strip()) and not all_date
+    if error:
+        st.warning(t("ct_delivery_all_invalid"))
+    if not ready and not all_date:
+        st.caption(t("ct_delivery_need_ready"))
+    base = {row.bol: (all_date or de.auto_delivery(row, ready)) for row in shipments}
+    for row in shipments:
+        row.delivery = over.get(row.bol, base[row.bol])
+    return base, error
+
+
+def delivery_table(
+    t: Callable[..., str], *, prefix: str, ready: str, shipments: list[de.ShipmentRow], base: dict[str, str],
+    frame: pd.DataFrame, position: int,
+) -> tuple[bool, bool]:
+    """Vista previa editable: la columna de fecha de entrega se puede cambiar celda por celda.
+
+    Aplica lo que se cambie a `shipments` y lo recuerda por BOL. Devuelve (hubo cambios, hay fechas no validas).
+    """
+    column = t("ct_col_delivery")
+    shown = pd.DataFrame(frame).copy()
+    shown.insert(position, column, [row.delivery or "" for row in shipments])
+    # La llave del editor NO depende de lo que la persona cambia (cambiarla a media edicion perderia el siguiente
+    # cambio); si cambia cualquier otra cosa que mueva las filas o las fechas base, o se recalcula todo, es otro editor.
+    basis = "|".join([
+        ready, str(st.session_state.get(f"{prefix}_delivery_gen", 0)), *(f"{r.bol}={base.get(r.bol, '')}" for r in shipments),
+    ])
+    key = f"{prefix}_delivery_editor_{hashlib.sha1(basis.encode()).hexdigest()[:10]}"
+    st.session_state[f"{prefix}_delivery_editor_key"] = key
+    edited = st.data_editor(
+        shown, key=key, hide_index=True, width="stretch", num_rows="fixed",
+        disabled=[c for c in shown.columns if c != column],
+        column_config={column: st.column_config.TextColumn(column, help=t("ct_col_delivery_help"), max_chars=10)},
+    )
+    over: dict[str, str] = st.session_state.setdefault(f"{prefix}_delivery_over", {})
+    changed, invalid = False, []
+    for row, value in zip(shipments, edited[column]):
+        text = "" if value is None or (isinstance(value, float) and pd.isna(value)) else str(value).strip()
+        fixed = de.format_delivery(text, ready)
+        if text and not fixed:
+            invalid.append(row.bol)
+        final = fixed if fixed or not text else text
+        if final != (row.delivery or ""):
+            changed = True
+        row.delivery = final
+        if final != base.get(row.bol, ""):
+            over[row.bol] = final
+        else:
+            over.pop(row.bol, None)
+    manual = [row.bol for row in shipments if row.bol in over]
+    if manual:
+        st.caption(t("ct_delivery_changed", count=len(manual), items=", ".join(manual[:20])))
+    st.caption(t("ct_delivery_hint", col=column))
+    if invalid:
+        st.warning(t("ct_delivery_invalid", items=", ".join(invalid[:20])))
+    return changed, bool(invalid)
+
+
 def _on_download(job: dict) -> None:
     _learn(list(job["contacts"].values()))
 
@@ -700,6 +820,9 @@ def render(t: Callable[..., str]) -> None:
     include_service = st.checkbox(
         t("ct_include_service"), value=True, help=t("ct_include_service_help"), key="ct_include_service",
     )
+    include_delivery = st.checkbox(
+        t("ct_include_delivery"), value=False, help=t("ct_include_delivery_help"), key="ct_include_delivery",
+    )
     pending_doubt = sum(1 for c in groups["doubt"])
     pending_fail = sum(1 for c in groups["fail"])
     if pending_doubt or pending_fail:
@@ -714,9 +837,17 @@ def render(t: Callable[..., str]) -> None:
     if notes["no_carrier"]:
         st.warning(t("ct_no_carrier_warn", items=", ".join(notes["no_carrier"][:20])))
 
-    date_bytes, results = de.build_workbook(
-        shipments, ready, include_attention=include_attention, include_service=include_service,
-    )
+    delivery_base, delivery_error = ({}, False)
+    if include_delivery:
+        delivery_base, delivery_error = delivery_inputs(t, prefix="ct", ready=ready, shipments=shipments)
+
+    def build() -> tuple[bytes, list[de.DateResult]]:
+        return de.build_workbook(
+            shipments, ready, include_attention=include_attention, include_service=include_service,
+            include_delivery=include_delivery,
+        )
+
+    date_bytes, results = build()
     preview = pd.DataFrame([{
         t("ct_col_bol"): r.values["B"],
         **({t("ct_col_name"): r.values["AB"], t("ct_col_phone"): r.values["AC"], t("ct_col_email"): r.values["DU"]}
@@ -725,7 +856,15 @@ def render(t: Callable[..., str]) -> None:
         **ready_columns(t, ready), "Consignee No.": r.values["T"],
     } for r in results])
     st.caption(t("ct_row_count", count=len(results)))
-    st.dataframe(preview, width="stretch", hide_index=True)
+    if include_delivery:
+        changed, bad = delivery_table(  # la fecha va junto al BOL para que se vea en la pantalla del telefono
+            t, prefix="ct", ready=ready, shipments=shipments, base=delivery_base, frame=preview, position=1,
+        )
+        delivery_error = delivery_error or bad
+        if changed:
+            date_bytes, results = build()
+    else:
+        st.dataframe(preview, width="stretch", hide_index=True)
 
     name_input = st.text_input(t("ct_filename"), key="ct_filename", help=t("ct_filename_help"), placeholder=ready or "DATE_IMPORT")
     file_name = de.safe_filename(name_input, ready)
@@ -734,5 +873,6 @@ def render(t: Callable[..., str]) -> None:
         st.info(t("dc_pending_download"))
     st.download_button(
         t("ct_download_date"), data=date_bytes, file_name=file_name, mime=XLSX_MIME,
-        width="stretch", key="ct_dl_date", type="primary", on_click=_on_download, args=(job,), disabled=not compared,
+        width="stretch", key="ct_dl_date", type="primary", on_click=_on_download, args=(job,),
+        disabled=not compared or delivery_error,
     )

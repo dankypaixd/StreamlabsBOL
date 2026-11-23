@@ -228,3 +228,23 @@ def test_inbonds_service_level_can_be_left_out_of_the_date():
     (frame,) = [d.value for d in at.dataframe if "Consignee No." in d.value.columns]
     assert not any("ervice" in c for c in frame.columns) and "FK" in frame.columns
     assert not _ib_download(at).proto.disabled
+
+
+@pytest.mark.skipif(shutil.which("tesseract") is None, reason="Tesseract no instalado")
+def test_inbonds_delivery_date_is_calculated_editable_and_blocks_a_bad_date():
+    at = _inbonds_with_dims(None)
+    assert not [d for d in at.dataframe if "Fecha de entrega" in d.value.columns]  # apagada por defecto
+    next(w for w in at.text_input if w.label.startswith("READY DATE")).set_value("11/23/26 0800").run()
+    at.checkbox(key="ib_include_delivery").check().run()
+    assert not at.exception
+    (frame,) = [d.value for d in at.dataframe if "Fecha de entrega" in d.value.columns]
+    assert list(frame["Fecha de entrega"]) == ["11/27/26"]  # Ontario es 4D: lunes 23 + 4 dias habiles
+    assert list(frame.columns)[:2] == ["BOL", "Fecha de entrega"]  # junto al BOL, a la vista en el telefono
+
+    key = at.session_state["ib_delivery_editor_key"]
+    at.session_state[key] = {"edited_rows": {0: {"Fecha de entrega": "12/2/26"}}, "added_rows": [], "deleted_rows": []}
+    at.run()
+    assert at.session_state["ib_delivery_over"] == {"3049251": "12/02/26"} and not _ib_download(at).proto.disabled
+    at.session_state[key] = {"edited_rows": {0: {"Fecha de entrega": "31/12/26"}}, "added_rows": [], "deleted_rows": []}
+    at.run()
+    assert _ib_download(at).proto.disabled and any("no válida" in w.value for w in at.warning)
